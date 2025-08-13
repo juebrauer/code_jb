@@ -7,7 +7,7 @@ A simple world with a robot falling from z=1.5m to the ground
 n objects will fall down from the sky
 
 
-# Errors?
+# Error: Failed to retrieve a framebuffer config
 
 If you get an
 
@@ -23,6 +23,23 @@ E.g., by adding them to your ~/.bashrc file
 Or call
 
     source set_env_variables.sh
+
+In my case this error vanished. However, PyBullet hung up from time to time ...
+
+For this, continue reading!
+
+
+# Error: PyBullet hangs up from time to time
+
+For me the following command was a good solution:
+
+    sudo prime-select nvidia
+
+With this command, all displays/monitors are rendered with the dGPU.
+
+Before, the internal GPU (iGPU) was rendering the 1st monitor and the NVIDIA GPU (dGPU) was rendering the 2nd monitor and this
+caused problems to PyBullet. With this command I also did not need to set the environment variables as before since verything
+is rendered by the NVIDIA GPU.
 
 
 # __NV_PRIME_RENDER_OFFLOAD
