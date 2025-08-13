@@ -1,10 +1,17 @@
 # Overview
 
-01_helloworld_pybullet:
+`01_helloworld_pybullet.py`:
 A simple world with a robot falling from z=1.5m to the ground
 
-02_falling_objects_pybullet:
+`02_falling_objects_pybullet.py`:
 n objects will fall down from the sky
+
+`03_franka_robot_table_with_objects.py`:
+A Franka robot arm that picks and places a single object
+
+`04_franka_robot_pick_red_with_recording.py`:
+The same robot am that picks and places a red object per episode.
+Camera views and actions are being recorded.
 
 
 # Error: Failed to retrieve a framebuffer config
