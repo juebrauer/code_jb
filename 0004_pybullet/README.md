@@ -10,7 +10,7 @@ n objects will fall down from the sky
 A Franka robot arm that picks and places a single object
 
 `04_franka_robot_pick_red_with_recording.py`:
-The same robot am that picks and places a red object per episode.
+The same robot arm that picks and places a red object per episode.
 Camera views and actions are being recorded.
 
 
@@ -45,7 +45,7 @@ For me the following command was a good solution:
 With this command, all displays/monitors are rendered with the dGPU.
 
 Before, the internal GPU (iGPU) was rendering the 1st monitor and the NVIDIA GPU (dGPU) was rendering the 2nd monitor and this
-caused problems to PyBullet. With this command I also did not need to set the environment variables as before since verything
+caused problems to PyBullet. With this command I also did not need to set the environment variables as before since everything
 is rendered by the NVIDIA GPU.
 
 

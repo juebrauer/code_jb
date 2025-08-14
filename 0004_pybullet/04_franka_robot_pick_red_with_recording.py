@@ -274,35 +274,32 @@ class DataRecorder:
     """Utility to record camera frames and action vectors for imitation learning.
 
     For each simulation step, call `next_frame(action_vector)` to save images from
-    top and side cameras and append the action vector into a CSV file.
+    multiple cameras and append the action vector into a CSV file.
     """
 
-    def __init__(self, root: str, ep_idx: int, top_view, top_proj, side_view, side_proj, img_w: int = IMG_W, img_h: int = IMG_H, save_every: int = 1):
+    def __init__(self, root: str, ep_idx: int, cameras_dict: dict, img_w: int = IMG_W, img_h: int = IMG_H, save_every: int = 1):
         self.ep_idx = ep_idx
         self.img_w = img_w
         self.img_h = img_h
-        self.top_view = top_view
-        self.top_proj = top_proj
-        self.side_view = side_view
-        self.side_proj = side_proj
+        self.cameras_dict = cameras_dict  # Dict with camera_name: (view_matrix, proj_matrix)
         self.frame = 0
         self.save_every = max(1, int(save_every))
 
         # Create directories
         self.base_dir = os.path.join(root, f"episode_{ep_idx:04d}")
-        self.top_dir = os.path.join(self.base_dir, "top")
-        self.side_dir = os.path.join(self.base_dir, "side")
-        os.makedirs(self.top_dir, exist_ok=True)
-        os.makedirs(self.side_dir, exist_ok=True)
+        self.cam_dirs = {}
+        for cam_name in cameras_dict.keys():
+            cam_dir = os.path.join(self.base_dir, cam_name)
+            os.makedirs(cam_dir, exist_ok=True)
+            self.cam_dirs[cam_name] = cam_dir
 
         # Open CSV for action logging
         self.csv_path = os.path.join(self.base_dir, "actions.csv")
         self.csv_file = open(self.csv_path, "w", newline="")
         self.writer = csv.writer(self.csv_file)
-        header = [
-            "frame",            # global sim frame index (not the saved-frame index)
-            "top_image",
-            "side_image",
+        
+        # Updated header with all camera views
+        header = ["frame"] + [f"{cam}_image" for cam in cameras_dict.keys()] + [
             # Action vector fields:
             "ee_tx", "ee_ty", "ee_tz",
             "ee_qx", "ee_qy", "ee_qz", "ee_qw",
@@ -314,28 +311,24 @@ class DataRecorder:
         self.writer.writerow(header)
 
     def _save_camera(self, view, proj, path: str) -> None:
-        """Capture current scene with provided camera matrices and save PNG to path.
-        NOTE: pybullet.getCameraImage returns (w, h, rgbImg, depthImg, segImg).
-        We must read the *third* return value for the RGBA buffer.
-        """
+        """Capture current scene with provided camera matrices and save PNG to path."""
         w, h, rgba, _, _ = p.getCameraImage(self.img_w, self.img_h, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
         rgba = np.array(rgba, dtype=np.uint8)
         rgb = np.reshape(rgba, (h, w, 4))[:, :, :3]
         Image.fromarray(rgb).save(path)
 
     def next_frame(self, action_vec: List[float]) -> None:
-        """Capture both cameras and append the given action vector for the current frame.
-        Respects `save_every`: only every k-th global frame is saved.
-        """
+        """Capture all cameras and append the given action vector for the current frame."""
         should_save = (self.frame % self.save_every == 0)
         if should_save:
-            top_name = f"top_{self.frame:06d}.png"
-            side_name = f"side_{self.frame:06d}.png"
-            top_path = os.path.join(self.top_dir, top_name)
-            side_path = os.path.join(self.side_dir, side_name)
-            self._save_camera(self.top_view, self.top_proj, top_path)
-            self._save_camera(self.side_view, self.side_proj, side_path)
-            row = [self.frame, os.path.relpath(top_path, self.base_dir), os.path.relpath(side_path, self.base_dir)] + action_vec
+            image_paths = []
+            for cam_name, (view, proj) in self.cameras_dict.items():
+                img_name = f"{cam_name}_{self.frame:06d}.png"
+                img_path = os.path.join(self.cam_dirs[cam_name], img_name)
+                self._save_camera(view, proj, img_path)
+                image_paths.append(os.path.relpath(img_path, self.base_dir))
+            
+            row = [self.frame] + image_paths + action_vec
             self.writer.writerow(row)
         self.frame += 1
 
@@ -409,7 +402,6 @@ def move_ik(robot: int, arm_joints: List[int], ee_link: int, pos: List[float], o
     q_start = [p.getJointState(robot, j)[0] for j in arm_joints]
     
     # Use more robust IK with current joint positions as rest pose
-    # This helps to find consistent solutions across episodes
     q_goal = p.calculateInverseKinematics(
         robot, ee_link, pos, orn,
         restPoses=q_start,  # Use current position as rest pose
@@ -431,13 +423,15 @@ def move_ik(robot: int, arm_joints: List[int], ee_link: int, pos: List[float], o
     return q_goal
 
 
-def setup_cameras() -> Tuple[List[float], List[float], List[float], List[float]]:
-    """Create view/projection matrices for a top and a side camera.
+def setup_cameras() -> dict:
+    """Create view/projection matrices for four cameras.
 
     Returns:
-        (top_view, top_proj, side_view, side_proj)
+        Dictionary with camera_name: (view_matrix, proj_matrix)
     """
-    # Top camera: above the table, looking down
+    cameras = {}
+    
+    # 1. Top camera: above the table, looking down
     cam_target = [0.05, 0.0, TABLE_TOP_Z]
     cam_up = [1, 0, 0]  # x-axis up to avoid roll ambiguity
     top_eye = [0.05, 0.0, TABLE_TOP_Z + 0.75]
@@ -445,17 +439,42 @@ def setup_cameras() -> Tuple[List[float], List[float], List[float], List[float]]
                                    cameraTargetPosition=cam_target,
                                    cameraUpVector=cam_up)
     top_proj = p.computeProjectionMatrixFOV(fov=60.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
+    cameras['top'] = (top_view, top_proj)
 
-    # Side camera: from +y side, looking towards the table center
-    side_eye = [-0.1, 0.75, TABLE_TOP_Z + 0.25]
-    side_target = [0.1, 0.0, TABLE_TOP_Z + 0.05]
-    side_up = [0, 0, 1]
+    # 2. Side camera: CORRECTED - now truly parallel to table
+    # Position at +y side, looking exactly perpendicular to the y-axis
+    side_eye = [0.0, 0.75, TABLE_TOP_Z + 0.10]  # x=0 for perfect side view, slightly above table
+    side_target = [0.0, 0.0, TABLE_TOP_Z + 0.10]  # Look straight across at same height
+    side_up = [0, 0, 1]  # Z-axis up for level view
     side_view = p.computeViewMatrix(cameraEyePosition=side_eye,
                                     cameraTargetPosition=side_target,
                                     cameraUpVector=side_up)
     side_proj = p.computeProjectionMatrixFOV(fov=70.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
+    cameras['side'] = (side_view, side_proj)
 
-    return top_view, top_proj, side_view, side_proj
+    # 3. Front camera: viewing robot from the front - FURTHER BACK
+    # Robot is at x=-0.35, so front view should be from positive x looking towards negative x
+    front_eye = [1.0, 0.0, TABLE_TOP_Z + 0.25]  # Further away and slightly higher
+    front_target = [-0.2, 0.0, TABLE_TOP_Z + 0.10]  # Look towards robot/workspace center
+    front_up = [0, 0, 1]
+    front_view = p.computeViewMatrix(cameraEyePosition=front_eye,
+                                     cameraTargetPosition=front_target,
+                                     cameraUpVector=front_up)
+    front_proj = p.computeProjectionMatrixFOV(fov=50.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
+    cameras['front'] = (front_view, front_proj)
+
+    # 4. Corner/bird's eye view: diagonal elevated perspective - FURTHER BACK
+    # Position at corner (+x, +y) looking down at an angle
+    corner_eye = [0.8, 0.8, TABLE_TOP_Z + 0.85]  # Further away in corner, more elevated
+    corner_target = [-0.05, 0.0, TABLE_TOP_Z + 0.05]  # Look slightly towards robot side
+    corner_up = [0, 0, 1]
+    corner_view = p.computeViewMatrix(cameraEyePosition=corner_eye,
+                                      cameraTargetPosition=corner_target,
+                                      cameraUpVector=corner_up)
+    corner_proj = p.computeProjectionMatrixFOV(fov=45.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
+    cameras['corner'] = (corner_view, corner_proj)
+
+    return cameras
 
 
 # ------------------------------------------------------------
@@ -503,7 +522,7 @@ def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_
     ee = get_link_index_by_name(panda, "panda_hand")
     assert ee is not None, "End-effector link not found"
 
-    # Green target surface (replacing container)
+    # Green target surface
     green_center = (0.25, -0.25)
     green_size = (0.18, 0.14)
     _, drop_pos = create_green_target_surface(center=green_center, size=green_size)
@@ -527,9 +546,9 @@ def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_
     p.setJointMotorControlArray(panda, arm[:7], p.POSITION_CONTROL, targetPositions=mid, forces=[ARM_FORCE] * 7)
     step(int(1.0 / DT))  # Give more time to reach home position
 
-    # Cameras & recorder
-    top_view, top_proj, side_view, side_proj = setup_cameras()
-    recorder = DataRecorder(DATA_ROOT, ep_idx, top_view, top_proj, side_view, side_proj, IMG_W, IMG_H, save_every=save_every)
+    # Setup all cameras & recorder
+    cameras_dict = setup_cameras()
+    recorder = DataRecorder(DATA_ROOT, ep_idx, cameras_dict, IMG_W, IMG_H, save_every=save_every)
 
     # Open gripper (record action)
     set_gripper(panda, fingers, open_width=0.08, speed_steps=80, recorder=recorder,
