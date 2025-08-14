@@ -1,6 +1,6 @@
 import os
 import math, time, random, csv
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import numpy as np
 from PIL import Image
@@ -112,7 +112,7 @@ def spawn_boxes_gray_and_one_red(n: int, seed: Optional[int] = None,
                                  clearance_red: float = CLEARANCE_RED,
                                  clearance_any: float = CLEARANCE_ANY,
                                  green_surface_center: Tuple[float, float] = None,
-                                 green_surface_size: Tuple[float, float] = None) -> Tuple[List[int], int]:
+                                 green_surface_size: Tuple[float, float] = None) -> Tuple[List[int], int, List[Dict]]:
     """Spawn n small cubes on the tabletop, all gray except one red, with spacing rules.
     
     Args:
@@ -126,7 +126,8 @@ def spawn_boxes_gray_and_one_red(n: int, seed: Optional[int] = None,
         green_surface_size: size of the green target surface.
     
     Returns:
-        (list_of_body_ids, red_body_id)
+        (list_of_body_ids, red_body_id, initial_positions_info)
+        where initial_positions_info is a list of dicts with object info
     """
     if seed is not None:
         random.seed(seed)
@@ -198,19 +199,144 @@ def spawn_boxes_gray_and_one_red(n: int, seed: Optional[int] = None,
             # Relax spacing a bit if crowded
             clearance_any = max(0.5 * clearance_any, 0.02)
 
-    # Create bodies
+    # Create bodies and store initial info
     bodies = []
+    initial_positions_info = []
+    
     for i, pos in enumerate(positions):
         color = RED if i == 0 else GRAY
+        color_name = "red" if i == 0 else "gray"
+        
         col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[OBJ_HALF] * 3)
         vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[OBJ_HALF] * 3, rgbaColor=color)
         b = p.createMultiBody(baseMass=OBJ_MASS, baseCollisionShapeIndex=col,
                               baseVisualShapeIndex=vis, basePosition=list(pos))
         set_friction(b, -1, lateral=1.2)
         bodies.append(b)
+        
+        # Store initial position info
+        initial_positions_info.append({
+            'object_id': i,
+            'body_id': b,
+            'color': color_name,
+            'x': pos[0],
+            'y': pos[1],
+            'z': pos[2]
+        })
 
     red_body_id = bodies[0]
-    return bodies, red_body_id
+    return bodies, red_body_id, initial_positions_info
+
+
+def save_initial_positions(ep_idx: int, positions_info: List[Dict]) -> None:
+    """Save initial object positions to a CSV file.
+    
+    Args:
+        ep_idx: episode index
+        positions_info: list of dicts containing object information
+    """
+    ep_dir = os.path.join(DATA_ROOT, f"episode_{ep_idx:04d}")
+    os.makedirs(ep_dir, exist_ok=True)
+    
+    csv_path = os.path.join(ep_dir, "initial_positions.csv")
+    with open(csv_path, 'w', newline='') as csvfile:
+        fieldnames = ['object_id', 'body_id', 'color', 'x', 'y', 'z']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        for obj_info in positions_info:
+            writer.writerow(obj_info)
+    
+    print(f"Initial positions saved to: {csv_path}")
+
+
+def validate_red_on_green(red_obj: int, green_center: Tuple[float, float], 
+                          green_size: Tuple[float, float], tolerance: float = 0.01) -> Tuple[bool, Dict]:
+    """Validate if the red object is properly placed on the green surface.
+    
+    Args:
+        red_obj: body ID of the red object
+        green_center: (x, y) center of the green surface
+        green_size: (x, y) dimensions of the green surface
+        tolerance: additional tolerance for position checking (meters)
+    
+    Returns:
+        (success, validation_info) where validation_info contains details about the validation
+    """
+    # Get final position of red object
+    pos, _ = p.getBasePositionAndOrientation(red_obj)
+    
+    # Check if x,y position is within green surface bounds (with tolerance)
+    cx, cy = green_center
+    sx, sy = green_size
+    
+    x_min = cx - sx/2 - tolerance
+    x_max = cx + sx/2 + tolerance
+    y_min = cy - sy/2 - tolerance
+    y_max = cy + sy/2 + tolerance
+    
+    x_ok = x_min <= pos[0] <= x_max
+    y_ok = y_min <= pos[1] <= y_max
+    
+    # Check if z position is reasonable (object should be resting on or near the surface)
+    expected_z = TABLE_TOP_Z + OBJ_HALF + 0.003  # Expected z when resting on surface
+    z_ok = abs(pos[2] - expected_z) < 0.02  # Allow 2cm tolerance in z
+    
+    success = x_ok and y_ok and z_ok
+    
+    validation_info = {
+        'success': success,
+        'red_position': pos,
+        'green_center': green_center,
+        'green_size': green_size,
+        'x_in_bounds': x_ok,
+        'y_in_bounds': y_ok,
+        'z_correct': z_ok,
+        'x_offset_from_center': pos[0] - cx,
+        'y_offset_from_center': pos[1] - cy,
+        'z_offset_from_expected': pos[2] - expected_z
+    }
+    
+    return success, validation_info
+
+
+def save_validation_result(ep_idx: int, validation_info: Dict) -> None:
+    """Save validation results to a file.
+    
+    Args:
+        ep_idx: episode index
+        validation_info: dictionary containing validation results
+    """
+    ep_dir = os.path.join(DATA_ROOT, f"episode_{ep_idx:04d}")
+    
+    # Save as CSV for easy reading
+    csv_path = os.path.join(ep_dir, "validation_result.csv")
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Metric', 'Value'])
+        for key, value in validation_info.items():
+            if isinstance(value, tuple):
+                # Handle tuples of different lengths
+                if len(value) == 2:
+                    value = f"({value[0]:.4f}, {value[1]:.4f})"
+                elif len(value) == 3:
+                    value = f"({value[0]:.4f}, {value[1]:.4f}, {value[2]:.4f})"
+                else:
+                    value = str(value)
+            elif isinstance(value, float):
+                value = f"{value:.4f}"
+            writer.writerow([key, value])
+    
+    # Print validation result
+    if validation_info['success']:
+        print(f"✓ Episode {ep_idx}: Validation SUCCESSFUL - Red object correctly placed on green surface")
+        print(f"  Position offsets from center: x={validation_info['x_offset_from_center']:.3f}m, "
+              f"y={validation_info['y_offset_from_center']:.3f}m")
+    else:
+        print(f"✗ Episode {ep_idx}: Validation FAILED - Red object NOT on green surface")
+        print(f"  X in bounds: {validation_info['x_in_bounds']}, "
+              f"Y in bounds: {validation_info['y_in_bounds']}, "
+              f"Z correct: {validation_info['z_correct']}")
 
 
 def get_link_index_by_name(body: int, needle: str) -> Optional[int]:
@@ -442,20 +568,18 @@ def setup_cameras() -> dict:
     cameras['top'] = (top_view, top_proj)
 
     # 2. Side camera: CORRECTED - now truly parallel to table
-    # Position at +y side, looking exactly perpendicular to the y-axis
-    side_eye = [0.0, 0.75, TABLE_TOP_Z + 0.10]  # x=0 for perfect side view, slightly above table
-    side_target = [0.0, 0.0, TABLE_TOP_Z + 0.10]  # Look straight across at same height
-    side_up = [0, 0, 1]  # Z-axis up for level view
+    side_eye = [0.0, 0.75, TABLE_TOP_Z + 0.10]
+    side_target = [0.0, 0.0, TABLE_TOP_Z + 0.10]
+    side_up = [0, 0, 1]
     side_view = p.computeViewMatrix(cameraEyePosition=side_eye,
                                     cameraTargetPosition=side_target,
                                     cameraUpVector=side_up)
     side_proj = p.computeProjectionMatrixFOV(fov=70.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
     cameras['side'] = (side_view, side_proj)
 
-    # 3. Front camera: viewing robot from the front - FURTHER BACK
-    # Robot is at x=-0.35, so front view should be from positive x looking towards negative x
-    front_eye = [1.0, 0.0, TABLE_TOP_Z + 0.25]  # Further away and slightly higher
-    front_target = [-0.2, 0.0, TABLE_TOP_Z + 0.10]  # Look towards robot/workspace center
+    # 3. Front camera: viewing robot from the front
+    front_eye = [1.0, 0.0, TABLE_TOP_Z + 0.25]
+    front_target = [-0.2, 0.0, TABLE_TOP_Z + 0.10]
     front_up = [0, 0, 1]
     front_view = p.computeViewMatrix(cameraEyePosition=front_eye,
                                      cameraTargetPosition=front_target,
@@ -463,10 +587,9 @@ def setup_cameras() -> dict:
     front_proj = p.computeProjectionMatrixFOV(fov=50.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
     cameras['front'] = (front_view, front_proj)
 
-    # 4. Corner/bird's eye view: diagonal elevated perspective - FURTHER BACK
-    # Position at corner (+x, +y) looking down at an angle
-    corner_eye = [0.8, 0.8, TABLE_TOP_Z + 0.85]  # Further away in corner, more elevated
-    corner_target = [-0.05, 0.0, TABLE_TOP_Z + 0.05]  # Look slightly towards robot side
+    # 4. Corner/bird's eye view: diagonal elevated perspective
+    corner_eye = [0.8, 0.8, TABLE_TOP_Z + 0.85]
+    corner_target = [-0.05, 0.0, TABLE_TOP_Z + 0.05]
     corner_up = [0, 0, 1]
     corner_view = p.computeViewMatrix(cameraEyePosition=corner_eye,
                                       cameraTargetPosition=corner_target,
@@ -528,7 +651,7 @@ def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_
     _, drop_pos = create_green_target_surface(center=green_center, size=green_size)
 
     # Objects with spacing constraints (avoiding green surface)
-    objs, red_obj = spawn_boxes_gray_and_one_red(
+    objs, red_obj, initial_positions = spawn_boxes_gray_and_one_red(
         N_OBJECTS, seed=seed,
         avoid_center=tuple(panda_base_pos),
         avoid_radius=RED_MIN_DIST_FROM_ROBOT,
@@ -537,6 +660,9 @@ def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_
         green_surface_center=green_center,
         green_surface_size=green_size
     )
+    
+    # Save initial positions to CSV
+    save_initial_positions(ep_idx, initial_positions)
 
     # Wait for settling
     step(240)
@@ -604,7 +730,12 @@ def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_
     if grasp_cid is not None:
         p.removeConstraint(grasp_cid)
 
+    # Wait for object to settle
     step(int(0.6 / DT))
+    
+    # Validate placement
+    success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
+    save_validation_result(ep_idx, validation_info)
 
     # Save camera state before closing
     if gui:
@@ -626,11 +757,36 @@ def main(gui: bool = True, episodes: int = 3, seed: Optional[int] = 42, save_eve
         save_every: save only every k-th frame to disk (k>=1).
     """
     os.makedirs(DATA_ROOT, exist_ok=True)
+    
+    print("\n" + "="*60)
+    print("Starting Pick-and-Place Data Collection with Validation")
+    print("="*60)
+    
+    successful_episodes = 0
+    
     for ep in range(episodes):
+        print(f"\n--- Episode {ep}/{episodes-1} ---")
         run_seed = None if seed is None else (seed + ep)
         run_episode(ep, gui=gui, seed=run_seed, save_every=save_every, first_episode=(ep == 0))
+        
+        # Check if episode was successful
+        validation_file = os.path.join(DATA_ROOT, f"episode_{ep:04d}", "validation_result.csv")
+        if os.path.exists(validation_file):
+            with open(validation_file, 'r') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if row[0] == 'success' and row[1] == 'True':
+                        successful_episodes += 1
+                        break
+    
+    print("\n" + "="*60)
+    print(f"Data Collection Complete!")
+    print(f"Success Rate: {successful_episodes}/{episodes} ({100*successful_episodes/episodes:.1f}%)")
+    print(f"Data saved in: {DATA_ROOT}/")
+    print("="*60 + "\n")
 
 
 if __name__ == "__main__":
     # Set gui=False for headless data collection
     main(gui=True, episodes=2, seed=123, save_every=50)
+    
