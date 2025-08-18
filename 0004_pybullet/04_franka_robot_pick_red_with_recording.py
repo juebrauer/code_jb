@@ -1,6 +1,18 @@
+"""
+# Record mode
+python script.py record --episodes 5 --seed 123 --save-every 20 --gui
+
+# Replay mode
+python script.py replay --episode-dir data/episode_0000 --replay-speed 0.1 --gui
+
+# Replay mode with video export
+python script.py replay --episode-dir data/episode_0000 --headless --save-video
+"""
+
 import os
 import math, time, random, csv
 from typing import List, Tuple, Optional, Dict
+import argparse
 
 import numpy as np
 from PIL import Image
@@ -40,6 +52,9 @@ STRONG_GRASP_HACK = False
 
 # Global variable to store camera state between episodes
 CAMERA_STATE = None
+
+# Replay parameters
+REPLAY_STEP_TIME = 0.01  # Time to wait after setting each action in replay mode (seconds)
 
 
 # ------------------------------------------------------------
@@ -104,6 +119,59 @@ def create_green_target_surface(center=(0.25, -0.25), size=(0.16, 0.12)) -> Tupl
     drop_pos = (cx, cy, TABLE_TOP_Z + thickness + OBJ_HALF + 0.001)
     
     return surface, drop_pos
+
+
+def load_initial_positions(csv_path: str) -> List[Dict]:
+    """Load initial object positions from CSV file.
+    
+    Args:
+        csv_path: path to the initial_positions.csv file
+        
+    Returns:
+        List of dicts containing object information
+    """
+    positions_info = []
+    with open(csv_path, 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            positions_info.append({
+                'object_id': int(row['object_id']),
+                'body_id': int(row['body_id']),  # Will be replaced with new body IDs
+                'color': row['color'],
+                'x': float(row['x']),
+                'y': float(row['y']),
+                'z': float(row['z'])
+            })
+    return positions_info
+
+
+def spawn_boxes_from_positions(positions_info: List[Dict]) -> Tuple[List[int], int]:
+    """Spawn objects at specific positions loaded from CSV.
+    
+    Args:
+        positions_info: list of dicts with object position information
+        
+    Returns:
+        (list_of_body_ids, red_body_id)
+    """
+    bodies = []
+    red_body_id = None
+    
+    for obj_info in positions_info:
+        pos = (obj_info['x'], obj_info['y'], obj_info['z'])
+        color = RED if obj_info['color'] == 'red' else GRAY
+        
+        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[OBJ_HALF] * 3)
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[OBJ_HALF] * 3, rgbaColor=color)
+        b = p.createMultiBody(baseMass=OBJ_MASS, baseCollisionShapeIndex=col,
+                              baseVisualShapeIndex=vis, basePosition=list(pos))
+        set_friction(b, -1, lateral=1.2)
+        bodies.append(b)
+        
+        if obj_info['color'] == 'red':
+            red_body_id = b
+    
+    return bodies, red_body_id
 
 
 def spawn_boxes_gray_and_one_red(n: int, seed: Optional[int] = None,
@@ -248,6 +316,44 @@ def save_initial_positions(ep_idx: int, positions_info: List[Dict]) -> None:
             writer.writerow(obj_info)
     
     print(f"Initial positions saved to: {csv_path}")
+
+
+def load_actions(csv_path: str) -> List[Dict]:
+    """Load action sequence from CSV file.
+    
+    Args:
+        csv_path: path to the actions.csv file
+        
+    Returns:
+        List of dicts containing action information for each frame
+    """
+    actions = []
+    with open(csv_path, 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            action = {
+                'frame': int(row['frame']),
+                # End-effector target pose
+                'ee_tx': float(row['ee_tx']),
+                'ee_ty': float(row['ee_ty']),
+                'ee_tz': float(row['ee_tz']),
+                'ee_qx': float(row['ee_qx']),
+                'ee_qy': float(row['ee_qy']),
+                'ee_qz': float(row['ee_qz']),
+                'ee_qw': float(row['ee_qw']),
+                # Joint targets
+                'q0': float(row['q0']),
+                'q1': float(row['q1']),
+                'q2': float(row['q2']),
+                'q3': float(row['q3']),
+                'q4': float(row['q4']),
+                'q5': float(row['q5']),
+                'q6': float(row['q6']),
+                # Gripper command
+                'gripper_open_width': float(row['gripper_open_width'])
+            }
+            actions.append(action)
+    return actions
 
 
 def validate_red_on_green(red_obj: int, green_center: Tuple[float, float], 
@@ -600,12 +706,44 @@ def setup_cameras() -> dict:
     return cameras
 
 
+def replay_action(robot: int, arm_joints: List[int], finger_joints: List[int], action: Dict, 
+                  wait_time: float = REPLAY_STEP_TIME) -> None:
+    """Execute a single action from the recorded sequence.
+    
+    Args:
+        robot: robot body ID
+        arm_joints: list of arm joint indices
+        finger_joints: list of finger joint indices
+        action: dictionary containing action information
+        wait_time: time to wait after setting the action (seconds)
+    """
+    # Extract joint targets and gripper command
+    joint_targets = [action[f'q{i}'] for i in range(7)]
+    gripper_width = action['gripper_open_width']
+    
+    # Set arm joint targets
+    p.setJointMotorControlArray(robot, arm_joints[:7], p.POSITION_CONTROL,
+                               targetPositions=joint_targets, 
+                               forces=[ARM_FORCE] * 7)
+    
+    # Set gripper targets
+    gripper_target = clamp(gripper_width * 0.5, 0.0, 0.045)
+    p.setJointMotorControlArray(robot, finger_joints, p.POSITION_CONTROL,
+                               targetPositions=[gripper_target] * len(finger_joints),
+                               forces=[FINGER_FORCE] * len(finger_joints))
+    
+    # Wait and step simulation
+    step_count = max(1, int(wait_time / DT))
+    step(step_count)
+
+
 # ------------------------------------------------------------
-# Main
+# Main Functions
 # ------------------------------------------------------------
 
-def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_every: int = 1, first_episode: bool = False) -> None:
-    """Run a single episode: spawn objects, pick the red one, place on green surface, and record data.
+def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None, 
+                      save_every: int = 1, first_episode: bool = False) -> None:
+    """Run a single recording episode: spawn objects, pick the red one, place on green surface, and record data.
 
     Args:
         ep_idx: episode index (used for seeding and file naming).
@@ -747,8 +885,117 @@ def run_episode(ep_idx: int, gui: bool = True, seed: Optional[int] = None, save_
     p.disconnect()
 
 
-def main(gui: bool = True, episodes: int = 3, seed: Optional[int] = 42, save_every: int = 1) -> None:
-    """Main entry: run multiple episodes of pick-and-place data collection.
+def run_episode_replay(ep_idx: int, initial_positions_path: str, actions_path: str, 
+                      gui: bool = True, replay_speed: float = 1.0, save_video: bool = False) -> None:
+    """Replay a recorded episode by loading initial positions and action sequence.
+
+    Args:
+        ep_idx: episode index for naming (if saving video).
+        initial_positions_path: path to initial_positions.csv file.
+        actions_path: path to actions.csv file.
+        gui: whether to use PyBullet GUI.
+        replay_speed: speed multiplier for replay (1.0 = normal speed, 0.5 = half speed, etc.)
+        save_video: whether to save the replay as video frames.
+    """
+    print(f"\n--- Replaying Episode {ep_idx} ---")
+    print(f"Initial positions: {initial_positions_path}")
+    print(f"Actions: {actions_path}")
+    
+    p.connect(p.GUI if gui else p.DIRECT)
+    p.setAdditionalSearchPath(pd.getDataPath())
+    p.resetSimulation()
+    p.setGravity(0, 0, -9.81)
+    p.setTimeStep(DT)
+    p.setRealTimeSimulation(0)
+    p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+
+    # Environment
+    p.loadURDF("plane.urdf")
+    _table = create_table()
+    panda_base_pos = [-0.35, 0.0, TABLE_TOP_Z + 0.001]
+    panda = p.loadURDF("franka_panda/panda.urdf", basePosition=panda_base_pos, useFixedBase=True)
+
+    # Increase finger friction
+    left_finger = get_link_index_by_name(panda, "leftfinger")
+    right_finger = get_link_index_by_name(panda, "rightfinger")
+    for lf in [left_finger, right_finger]:
+        if lf is not None:
+            set_friction(panda, lf, lateral=2.0)
+
+    # Joints and EE
+    arm = joint_indices(panda)
+    _, fingers = joint_indices(panda, include_fingers=True)
+    ee = get_link_index_by_name(panda, "panda_hand")
+    assert ee is not None, "End-effector link not found"
+
+    # Green target surface
+    green_center = (0.25, -0.25)
+    green_size = (0.18, 0.14)
+    _, drop_pos = create_green_target_surface(center=green_center, size=green_size)
+
+    # Load and spawn objects from initial positions
+    print("Loading initial positions...")
+    initial_positions = load_initial_positions(initial_positions_path)
+    objs, red_obj = spawn_boxes_from_positions(initial_positions)
+    print(f"Spawned {len(objs)} objects (red object ID: {red_obj})")
+
+    # Wait for settling
+    step(240)
+
+    # Load action sequence
+    print("Loading action sequence...")
+    actions = load_actions(actions_path)
+    print(f"Loaded {len(actions)} actions")
+
+    # Setup video recording if requested
+    video_recorder = None
+    if save_video:
+        cameras_dict = setup_cameras()
+        video_recorder = DataRecorder(DATA_ROOT, ep_idx, cameras_dict, IMG_W, IMG_H, save_every=1)
+
+    # Calculate wait time based on replay speed
+    action_wait_time = REPLAY_STEP_TIME / replay_speed
+
+    # Replay actions
+    print("Starting replay...")
+    for i, action in enumerate(actions):
+        if i % 100 == 0:
+            print(f"Replaying action {i}/{len(actions)}")
+        
+        replay_action(panda, arm, fingers, action, wait_time=action_wait_time)
+        
+        # Record video frame if requested
+        if video_recorder is not None:
+            # Create dummy action vector for video recording
+            action_vec = [action['ee_tx'], action['ee_ty'], action['ee_tz'],
+                         action['ee_qx'], action['ee_qy'], action['ee_qz'], action['ee_qw']] + \
+                        [action[f'q{j}'] for j in range(7)] + [action['gripper_open_width']]
+            video_recorder.next_frame(action_vec)
+
+    # Final validation
+    success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
+    print(f"\nReplay validation result:")
+    if validation_info['success']:
+        print(f"✓ Replay SUCCESSFUL - Red object correctly placed on green surface")
+        print(f"  Position offsets from center: x={validation_info['x_offset_from_center']:.3f}m, "
+              f"y={validation_info['y_offset_from_center']:.3f}m")
+    else:
+        print(f"✗ Replay FAILED - Red object NOT on green surface")
+        print(f"  X in bounds: {validation_info['x_in_bounds']}, "
+              f"Y in bounds: {validation_info['y_in_bounds']}, "
+              f"Z correct: {validation_info['z_correct']}")
+
+    # Cleanup
+    if video_recorder is not None:
+        video_recorder.close()
+    
+    print("Replay complete!")
+    time.sleep(0.2)
+    p.disconnect()
+
+
+def main_record(gui: bool = True, episodes: int = 3, seed: Optional[int] = 42, save_every: int = 1) -> None:
+    """Main entry for recording mode: run multiple episodes of pick-and-place data collection.
 
     Args:
         gui: if True, run with PyBullet GUI; if False, headless.
@@ -767,7 +1014,7 @@ def main(gui: bool = True, episodes: int = 3, seed: Optional[int] = 42, save_eve
     for ep in range(episodes):
         print(f"\n--- Episode {ep}/{episodes-1} ---")
         run_seed = None if seed is None else (seed + ep)
-        run_episode(ep, gui=gui, seed=run_seed, save_every=save_every, first_episode=(ep == 0))
+        run_episode_record(ep, gui=gui, seed=run_seed, save_every=save_every, first_episode=(ep == 0))
         
         # Check if episode was successful
         validation_file = os.path.join(DATA_ROOT, f"episode_{ep:04d}", "validation_result.csv")
@@ -786,7 +1033,82 @@ def main(gui: bool = True, episodes: int = 3, seed: Optional[int] = 42, save_eve
     print("="*60 + "\n")
 
 
-if __name__ == "__main__":
-    # Set gui=False for headless data collection
-    main(gui=True, episodes=2, seed=123, save_every=50)
+def main_replay(episode_dir: str, gui: bool = True, replay_speed: float = 1.0, 
+               save_video: bool = False, ep_idx: Optional[int] = None) -> None:
+    """Main entry for replay mode: replay a recorded episode.
+
+    Args:
+        episode_dir: path to episode directory containing initial_positions.csv and actions.csv.
+        gui: if True, run with PyBullet GUI; if False, headless.
+        replay_speed: speed multiplier for replay (1.0 = normal, 0.5 = half speed, etc.)
+        save_video: whether to save the replay as video frames.
+        ep_idx: episode index for naming (if saving video). If None, extracted from episode_dir.
+    """
+    # Extract episode index if not provided
+    if ep_idx is None:
+        import re
+        match = re.search(r'episode_(\d+)', episode_dir)
+        ep_idx = int(match.group(1)) if match else 0
     
+    # Check for required files
+    initial_positions_path = os.path.join(episode_dir, "initial_positions.csv")
+    actions_path = os.path.join(episode_dir, "actions.csv")
+    
+    if not os.path.exists(initial_positions_path):
+        raise FileNotFoundError(f"Initial positions file not found: {initial_positions_path}")
+    if not os.path.exists(actions_path):
+        raise FileNotFoundError(f"Actions file not found: {actions_path}")
+    
+    print("\n" + "="*60)
+    print("Starting Episode Replay")
+    print("="*60)
+    
+    run_episode_replay(ep_idx, initial_positions_path, actions_path, 
+                      gui=gui, replay_speed=replay_speed, save_video=save_video)
+    
+    print("\n" + "="*60)
+    print("Replay Complete!")
+    print("="*60 + "\n")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Franka Robot Pick-and-Place: Record or Replay")
+    parser.add_argument("mode", choices=["record", "replay"], help="Mode: record new episodes or replay existing ones")
+    
+    # Recording arguments
+    parser.add_argument("--episodes", type=int, default=3, help="Number of episodes to record (record mode)")
+    parser.add_argument("--seed", type=int, default=123, help="Random seed for recording (record mode)")
+    parser.add_argument("--save-every", type=int, default=50, help="Save every N-th frame (record mode)")
+    
+    # Replay arguments
+    parser.add_argument("--episode-dir", type=str, help="Episode directory to replay (replay mode)")
+    parser.add_argument("--replay-speed", type=float, default=0.1, help="Replay speed multiplier (replay mode)")
+    parser.add_argument("--save-video", action="store_true", help="Save replay as video frames (replay mode)")
+    parser.add_argument("--ep-idx", type=int, help="Episode index for naming (replay mode)")
+    
+    # Common arguments
+    parser.add_argument("--gui", action="store_true", default=True, help="Use PyBullet GUI")
+    parser.add_argument("--headless", action="store_true", help="Run without GUI (overrides --gui)")
+    
+    args = parser.parse_args()
+    
+    # Handle GUI setting
+    gui = args.gui and not args.headless
+    
+    if args.mode == "record":
+        main_record(gui=gui, episodes=args.episodes, seed=args.seed, save_every=args.save_every)
+    
+    elif args.mode == "replay":
+        if not args.episode_dir:
+            parser.error("--episode-dir is required for replay mode")
+        main_replay(args.episode_dir, gui=gui, replay_speed=args.replay_speed, 
+                   save_video=args.save_video, ep_idx=args.ep_idx)
+
+    # Example usage for direct execution:
+    # Uncomment one of the following lines for testing:
+    
+    # Record mode example:
+    # main_record(gui=True, episodes=2, seed=123, save_every=50)
+    
+    # Replay mode example:
+    # main_replay("data/episode_0000", gui=True, replay_speed=1.0, save_video=False)
