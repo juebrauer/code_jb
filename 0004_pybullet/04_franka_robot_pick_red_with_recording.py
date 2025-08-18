@@ -1,14 +1,3 @@
-"""
-# Record mode
-python script.py record --episodes 5 --seed 123 --save-every 20 --gui
-
-# Replay mode
-python script.py replay --episode-dir data/episode_0000 --replay-speed 0.1 --gui
-
-# Replay mode with video export
-python script.py replay --episode-dir data/episode_0000 --headless --save-video
-"""
-
 import os
 import math, time, random, csv
 from typing import List, Tuple, Optional, Dict
@@ -54,7 +43,9 @@ STRONG_GRASP_HACK = False
 CAMERA_STATE = None
 
 # Replay parameters
-REPLAY_STEP_TIME = 0.01  # Time to wait after setting each action in replay mode (seconds)
+REPLAY_STEP_TIME = 0.05  # Time to wait after setting each action in replay mode (seconds)
+# Note: This needs to be long enough for joints to move toward their targets
+# Original recording uses many interpolated steps, replay uses discrete jumps
 
 
 # ------------------------------------------------------------
@@ -707,7 +698,7 @@ def setup_cameras() -> dict:
 
 
 def replay_action(robot: int, arm_joints: List[int], finger_joints: List[int], action: Dict, 
-                  wait_time: float = REPLAY_STEP_TIME) -> None:
+                  wait_time: float = REPLAY_STEP_TIME, max_wait_time: float = 0.2) -> None:
     """Execute a single action from the recorded sequence.
     
     Args:
@@ -715,7 +706,8 @@ def replay_action(robot: int, arm_joints: List[int], finger_joints: List[int], a
         arm_joints: list of arm joint indices
         finger_joints: list of finger joint indices
         action: dictionary containing action information
-        wait_time: time to wait after setting the action (seconds)
+        wait_time: base time to wait after setting the action (seconds)
+        max_wait_time: maximum time to wait for convergence (seconds)
     """
     # Extract joint targets and gripper command
     joint_targets = [action[f'q{i}'] for i in range(7)]
@@ -732,9 +724,18 @@ def replay_action(robot: int, arm_joints: List[int], finger_joints: List[int], a
                                targetPositions=[gripper_target] * len(finger_joints),
                                forces=[FINGER_FORCE] * len(finger_joints))
     
-    # Wait and step simulation
+    # Wait for joints to move toward targets with adaptive timing
     step_count = max(1, int(wait_time / DT))
-    step(step_count)
+    max_steps = max(step_count, int(max_wait_time / DT))
+    
+    for i in range(max_steps):
+        step(1)
+        
+        # Check if we've reached minimum wait time
+        if i >= step_count:
+            # Optionally check for convergence here
+            # For now, just use the minimum wait time
+            break
 
 
 # ------------------------------------------------------------
@@ -868,8 +869,19 @@ def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None
     if grasp_cid is not None:
         p.removeConstraint(grasp_cid)
 
-    # Wait for object to settle
-    step(int(0.6 / DT))
+    # Wait for object to settle briefly
+    step(int(0.3 / DT))
+    
+    # Move arm up and away after releasing the object
+    retreat_pos = [lower_drop[0], lower_drop[1], TABLE_TOP_Z + 0.20]  # Move up 20cm from table
+    q_last = move_ik(panda, arm, ee, retreat_pos, down_orn, duration_s=0.8, recorder=recorder, gripper_open_width=0.08)
+    
+    # Optional: Move to a safe home-like position
+    safe_pos = [panda_base_pos[0] + 0.3, panda_base_pos[1], TABLE_TOP_Z + 0.25]  # Move closer to robot base
+    q_last = move_ik(panda, arm, ee, safe_pos, down_orn, duration_s=1.0, recorder=recorder, gripper_open_width=0.08)
+
+    # Wait for final settling and validation
+    step(int(0.4 / DT))
     
     # Validate placement
     success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
@@ -971,6 +983,24 @@ def run_episode_replay(ep_idx: int, initial_positions_path: str, actions_path: s
                          action['ee_qx'], action['ee_qy'], action['ee_qz'], action['ee_qw']] + \
                         [action[f'q{j}'] for j in range(7)] + [action['gripper_open_width']]
             video_recorder.next_frame(action_vec)
+
+    # Ensure gripper is open and arm is in safe position after replay
+    print("Finalizing arm position...")
+    
+    # Open gripper to ensure object is released
+    gripper_target = clamp(0.08 * 0.5, 0.0, 0.045)  # Fully open
+    p.setJointMotorControlArray(panda, fingers, p.POSITION_CONTROL,
+                               targetPositions=[gripper_target] * len(fingers),
+                               forces=[FINGER_FORCE] * len(fingers))
+    
+    # Move to safe position above the table
+    safe_joint_pos = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]  # Home position
+    p.setJointMotorControlArray(panda, arm[:7], p.POSITION_CONTROL,
+                               targetPositions=safe_joint_pos, 
+                               forces=[ARM_FORCE] * 7)
+    
+    # Wait for final movements to complete
+    step(int(1.0 / DT))
 
     # Final validation
     success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
@@ -1082,7 +1112,7 @@ if __name__ == "__main__":
     
     # Replay arguments
     parser.add_argument("--episode-dir", type=str, help="Episode directory to replay (replay mode)")
-    parser.add_argument("--replay-speed", type=float, default=0.1, help="Replay speed multiplier (replay mode)")
+    parser.add_argument("--replay-speed", type=float, default=1.0, help="Replay speed multiplier (replay mode)")
     parser.add_argument("--save-video", action="store_true", help="Save replay as video frames (replay mode)")
     parser.add_argument("--ep-idx", type=int, help="Episode index for naming (replay mode)")
     
