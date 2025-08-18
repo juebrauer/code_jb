@@ -823,7 +823,7 @@ def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None
     pos_obj, _ = p.getBasePositionAndOrientation(red_obj)
     down_orn = p.getQuaternionFromEuler([math.pi, 0, 0])  # TCP points down
     approach = [pos_obj[0], pos_obj[1], TABLE_TOP_Z + 0.18]
-    descend  = [pos_obj[0], pos_obj[1], TABLE_TOP_Z + OBJ_HALF + 0.005]  # Get closer to object
+    descend  = [pos_obj[0], pos_obj[1], TABLE_TOP_Z + OBJ_HALF + 0.05]  # Get closer to object
     lift     = [pos_obj[0], pos_obj[1], TABLE_TOP_Z + 0.25]
 
     # Approach, descend, close, lift
@@ -860,7 +860,7 @@ def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None
     q_last = move_ik(panda, arm, ee, above_drop, down_orn, duration_s=1.0, recorder=recorder, gripper_open_width=0.0)
     
     # Lower to place on green surface (adjusted height for surface instead of container)
-    lower_drop = [drop_pos[0], drop_pos[1], drop_pos[2] + 0.005]  # Slightly above the calculated drop position
+    lower_drop = [drop_pos[0], drop_pos[1], drop_pos[2] + 0.05]  # Slightly above the calculated drop position
     q_last = move_ik(panda, arm, ee, lower_drop, down_orn, duration_s=0.8, recorder=recorder, gripper_open_width=0.0)
 
     # Open to release
