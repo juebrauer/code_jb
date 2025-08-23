@@ -1,6 +1,6 @@
 # Overview
 
-## `python 01_backprop_weight_evolution.py`
+## `01_backprop_weight_evolution.py`
 Shows that weights change systematically when using backpropagation:
 for some steps the changes are into the same direction.
 Plots will be generated and can be found in the folder `weight_evolution_plots`.
