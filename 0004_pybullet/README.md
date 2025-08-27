@@ -3,7 +3,7 @@
 ## `01_helloworld_pybullet.py`
 A simple world with a robot falling from z=1.5m to the ground
 
-Call it with:
+Example usage:\
 `python 01_helloworld_pybullet.py`
 
 
@@ -11,7 +11,7 @@ Call it with:
 ## `02_falling_objects_pybullet.py`
 n objects will fall down from the sky
 
-Example usage:
+Example usage:\
 `python 02_falling_objects_pybullt.py --n 100 --seconds 5 --seed 42`
 
 
@@ -19,7 +19,7 @@ Example usage:
 ## `03_franka_robot_table_with_objects.py`
 A Franka robot arm that picks and places a single object
 
-Example usage:
+Example usage:\
 `python 03_franka_robot_table_with_objects.py`
 
 
@@ -28,7 +28,7 @@ Example usage:
 The same robot arm that picks and places a red object per episode.
 Camera views and actions are being recorded.
 
-Example usage:
+Example usage:\
 `python 04_franka_robot_pick_red_with_recording.py --episodes 100 --seed 42 --save-every 10`
 
 The recorded sequences will be stored in a folder with name `data`.
@@ -39,8 +39,28 @@ The recorded sequences will be stored in a folder with name `data`.
 
 
 
+# Do you have errors? Here are some hints!
 
-# Error: Failed to retrieve a framebuffer config
+
+## Error: PyBullet hangs up from time to time / Famebuffer error message
+
+
+If
+    PyBullet hangs up from time to time
+OR
+    you get an error "Failed to retrieve a framebuffer config"
+
+For me the following command was a good solution:
+
+    sudo prime-select nvidia
+
+With this command, all displays/monitors are rendered with the dGPU.
+
+Before, the internal GPU (iGPU) was rendering the 1st monitor and the NVIDIA GPU (dGPU) was rendering the 2nd monitor and this
+caused problems to PyBullet. With this command I also did not need to set the environment variables as in the following section explained since everything is rendered then by the NVIDIA GPU.
+
+
+## Error: Failed to retrieve a framebuffer config
 
 If you get an
 
@@ -57,25 +77,8 @@ Or call
 
     source set_env_variables.sh
 
-In my case this error vanished. However, PyBullet hung up from time to time ...
 
-For this, continue reading!
-
-
-# Error: PyBullet hangs up from time to time
-
-For me the following command was a good solution:
-
-    sudo prime-select nvidia
-
-With this command, all displays/monitors are rendered with the dGPU.
-
-Before, the internal GPU (iGPU) was rendering the 1st monitor and the NVIDIA GPU (dGPU) was rendering the 2nd monitor and this
-caused problems to PyBullet. With this command I also did not need to set the environment variables as before since everything
-is rendered by the NVIDIA GPU.
-
-
-# __NV_PRIME_RENDER_OFFLOAD
+Explanation:
 
 The environment variable __NV_PRIME_RENDER_OFFLOAD=1 is a signal to the NVIDIA driver that tells it:
 
@@ -94,7 +97,7 @@ With offload mode set to 1:
 - Rendered frames are then copied back to integrated GPU for display
 - Much higher performance for graphics-intensive tasks
 
-# __GLX_VENDOR_LIBRARY_NAME
+__GLX_VENDOR_LIBRARY_NAME
 
 The environment variable __GLX_VENDOR_LIBRARY_NAME=nvidia tells the system which OpenGL implementation to use for rendering.
 
