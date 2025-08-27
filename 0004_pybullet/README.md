@@ -1,17 +1,43 @@
 # Overview
 
-`01_helloworld_pybullet.py`:
+## `01_helloworld_pybullet.py`
 A simple world with a robot falling from z=1.5m to the ground
 
-`02_falling_objects_pybullet.py`:
+Call it with:
+`python 01_helloworld_pybullet.py`
+
+
+
+## `02_falling_objects_pybullet.py`
 n objects will fall down from the sky
 
-`03_franka_robot_table_with_objects.py`:
+Example usage:
+`python 02_falling_objects_pybullt.py --n 100 --seconds 5 --seed 42`
+
+
+
+## `03_franka_robot_table_with_objects.py`
 A Franka robot arm that picks and places a single object
 
-`04_franka_robot_pick_red_with_recording.py`:
+Example usage:
+`python 03_franka_robot_table_with_objects.py`
+
+
+
+## `04_franka_robot_pick_red_with_recording.py`
 The same robot arm that picks and places a red object per episode.
 Camera views and actions are being recorded.
+
+Example usage:
+`python 04_franka_robot_pick_red_with_recording.py --episodes 100 --seed 42 --save-every 10`
+
+The recorded sequences will be stored in a folder with name `data`.
+
+
+
+## `05_train_and_test_cnn.py`
+
+
 
 
 # Error: Failed to retrieve a framebuffer config
