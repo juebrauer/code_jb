@@ -567,10 +567,28 @@ def run_episode_cnn_control(ep_idx: int, model_path: str, gui: bool = True,
     p.setTimeStep(DT)
     p.setRealTimeSimulation(0)
     p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-    
-    # Restore camera state if available
+
+    # Set optimal corner view for better observation
     if gui:
-        restore_camera_state()
+        p.resetDebugVisualizerCamera(
+            cameraDistance=1.0,
+            cameraYaw=45,
+            cameraPitch=-25,
+            cameraTargetPosition=[0.1, 0.0, TABLE_TOP_Z + 0.1]
+        )
+    
+    # Set camera to corner view for better observation
+    if gui:
+        p.resetDebugVisualizerCamera(
+            cameraDistance=1.0,           # Good distance to see everything
+            cameraYaw=45,                 # Corner view (45 degrees)
+            cameraPitch=-25,              # Angled downward to see table and robot
+            cameraTargetPosition=[0.1, 0.0, TABLE_TOP_Z + 0.1]  # Focus slightly forward on table
+        )
+    
+    # Restore camera state if available (but override with our preferred view)
+    # if gui:
+    #     restore_camera_state()  # Commented out to keep our close side view
 
     # Environment setup
     p.loadURDF("plane.urdf")
@@ -1006,8 +1024,18 @@ def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None
     p.setRealTimeSimulation(0)
     p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
     
-    if not first_episode and gui:
-        restore_camera_state()
+    # Set optimal corner view for better observation
+    if gui:
+        p.resetDebugVisualizerCamera(
+            cameraDistance=1.0,
+            cameraYaw=45,
+            cameraPitch=-25,
+            cameraTargetPosition=[0.1, 0.0, TABLE_TOP_Z + 0.1]
+        )
+    
+    # Comment out camera state restoration to keep our preferred view
+    # if not first_episode and gui:
+    #     restore_camera_state()
 
     # Environment
     p.loadURDF("plane.urdf")
