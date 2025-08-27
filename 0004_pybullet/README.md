@@ -29,13 +29,24 @@ The same robot arm that picks and places a red object per episode.
 Camera views and actions are being recorded.
 
 Example usage:\
-`python 04_franka_robot_pick_red_with_recording.py --episodes 100 --seed 42 --save-every 10`
+`python 04_franka_robot_pick_red_with_recording.py --episodes 100 --seed 42 --save-every 10 record`
 
 The recorded sequences will be stored in a folder with name `data`.
 
 
 
 ## `05_train_and_test_cnn.py`
+Trains and tests a CNN for controlling a robot arm using example (image, action) pairs.
+
+Example usage for training:\
+`python 05_train_and_test_cnn.py --mode train --input_dir data_franka_pick_and_place_15episodes --max_episodes 5 --epochs 2`
+
+If you want to train with all episodes available in the input directory, do not specify the `--max_episodes` parameter.
+
+Example usage for testing:\
+
+`python 05_train_and_test_cnn.py --mode test --input_dir data_franka_pick_and_place_15episodes --model_path model_checkpoints/robot_cnn_best.pth --test_episode data_franka_pick_and_place_15episodes/episode_0005`
+
 
 
 

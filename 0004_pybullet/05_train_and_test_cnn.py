@@ -8,6 +8,7 @@ import numpy as np
 import os
 import csv
 import glob
+import argparse
 from pathlib import Path
 import matplotlib.pyplot as plt
 
@@ -72,7 +73,7 @@ class RobotCNN(nn.Module):
 class RobotDataset(Dataset):
     """Dataset for robot training data with the actual data structure"""
     
-    def __init__(self, data_dir, transform=None, image_size=224):
+    def __init__(self, data_dir, transform=None, image_size=224, max_episodes=None):
         self.data_dir = Path(data_dir)
         self.transform = transform
         self.image_size = image_size
@@ -92,8 +93,12 @@ class RobotDataset(Dataset):
                 
                 if actions_file.exists() and all(cam_dir.exists() for cam_dir in camera_dirs.values()):
                     self.episodes.append(episode_dir)
+                    
+                    # Limit number of episodes if specified
+                    if max_episodes and len(self.episodes) >= max_episodes:
+                        break
         
-        print(f"Found: {len(self.episodes)} valid episodes")
+        print(f"Found: {len(self.episodes)} valid episodes (max_episodes: {max_episodes})")
         
         # Load all data into memory
         self.data = []
@@ -219,7 +224,7 @@ class RobotDataset(Dataset):
         
         return combined_image, action
 
-def analyze_dataset(data_dir):
+def analyze_dataset(data_dir, max_episodes=None):
     """Analyze the data structure and show statistics"""
     data_path = Path(data_dir)
     
@@ -228,7 +233,10 @@ def analyze_dataset(data_dir):
     print("="*60)
     
     episodes = sorted(data_path.glob("episode_*"))
-    print(f"Found episodes: {len(episodes)}")
+    if max_episodes:
+        episodes = episodes[:max_episodes]
+    
+    print(f"Analyzing episodes: {len(episodes)} (max_episodes: {max_episodes})")
     
     total_frames = 0
     action_samples = []
@@ -320,7 +328,7 @@ def analyze_dataset(data_dir):
 
 def train_model(data_dir, model_save_dir="model_checkpoints", 
                 num_epochs=50, batch_size=16, learning_rate=0.001,
-                image_size=224, action_dim=14):
+                image_size=224, action_dim=15, max_episodes=None):
     """Train the CNN model"""
     
     # Create directory for model checkpoints
@@ -364,7 +372,7 @@ def train_model(data_dir, model_save_dir="model_checkpoints",
     
     # Create dataset
     print("Loading dataset...")
-    full_dataset = RobotDataset(data_dir, transform=None, image_size=image_size)
+    full_dataset = RobotDataset(data_dir, transform=None, image_size=image_size, max_episodes=max_episodes)
     
     if len(full_dataset) == 0:
         raise ValueError("No valid data found! Please check the data structure.")
@@ -589,58 +597,105 @@ def test_model_on_episode(model_path, episode_dir, device='cpu'):
     avg_loss = total_loss / min(10, len(episode_data))
     print(f"Average loss: {avg_loss:.6f}")
 
-if __name__ == "__main__":
-    # Configuration
-    DATA_DIR = "data_franka_pick_and_place_15episodes"  # Your directory with the episodes
-    MODEL_SAVE_DIR = "model_checkpoints"
+def main():
+    parser = argparse.ArgumentParser(description='Robot CNN Training and Testing')
+    parser.add_argument('--mode', choices=['train', 'test'], required=True,
+                        help='Mode: train or test')
+    parser.add_argument('--input_dir', type=str, required=True,
+                        help='Input directory containing episodes')
+    parser.add_argument('--max_episodes', type=int, default=None,
+                        help='Maximum number of episodes to use (default: all)')
+    parser.add_argument('--model_dir', type=str, default='model_checkpoints',
+                        help='Directory to save/load model checkpoints')
+    parser.add_argument('--model_path', type=str, default=None,
+                        help='Specific model path for testing (default: best model in model_dir)')
+    parser.add_argument('--test_episode', type=str, default=None,
+                        help='Specific episode directory for testing (default: first episode)')
     
-    # Training parameters  
-    NUM_EPOCHS = 50
-    BATCH_SIZE = 4  # Reduced for CPU training and older GPUs
-    LEARNING_RATE = 0.001
-    IMAGE_SIZE = 224
-    ACTION_DIM = 15  # Action vector dimensions: 3(ee_pos) + 4(ee_quat) + 7(joints) + 1(gripper)
+    # Training parameters
+    parser.add_argument('--epochs', type=int, default=50,
+                        help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=4,
+                        help='Batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=0.001,
+                        help='Learning rate')
+    parser.add_argument('--image_size', type=int, default=224,
+                        help='Image size for resizing')
+    parser.add_argument('--action_dim', type=int, default=15,
+                        help='Action vector dimensions')
+    
+    args = parser.parse_args()
+    
+    # Check if input directory exists
+    if not os.path.exists(args.input_dir):
+        print(f"Error: Input directory {args.input_dir} not found!")
+        return 1
     
     # Analyze dataset first
-    if os.path.exists(DATA_DIR):
-        analyze_dataset(DATA_DIR)
-    else:
-        print(f"Data directory {DATA_DIR} not found!")
-        exit(1)
+    print("Analyzing dataset...")
+    analyze_dataset(args.input_dir, args.max_episodes)
     
-    # Ask user if training should be started
-    response = input("\nDo you want to start training? (y/n): ")
-    if response.lower() == 'y':
+    if args.mode == 'train':
+        print(f"\nStarting training with {args.max_episodes or 'all'} episodes...")
         try:
             model, train_losses, val_losses = train_model(
-                data_dir=DATA_DIR,
-                model_save_dir=MODEL_SAVE_DIR,
-                num_epochs=NUM_EPOCHS,
-                batch_size=BATCH_SIZE,
-                learning_rate=LEARNING_RATE,
-                image_size=IMAGE_SIZE,
-                action_dim=ACTION_DIM
+                data_dir=args.input_dir,
+                model_save_dir=args.model_dir,
+                num_epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.learning_rate,
+                image_size=args.image_size,
+                action_dim=args.action_dim,
+                max_episodes=args.max_episodes
             )
             
             print(f"\nTraining completed successfully!")
             print(f"Final training loss: {train_losses[-1]:.6f}")
             print(f"Final validation loss: {val_losses[-1]:.6f}")
             
-            # Test the model on the first episode
-            best_model_path = os.path.join(MODEL_SAVE_DIR, "robot_cnn_best.pth")
-            first_episode = os.path.join(DATA_DIR, "episode_0000")
-            if os.path.exists(best_model_path) and os.path.exists(first_episode):
-                print("\nTesting model on first episode...")
-                test_model_on_episode(best_model_path, first_episode, 
-                                    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-            
         except Exception as e:
             print(f"Error during training: {e}")
             import traceback
             traceback.print_exc()
-    else:
-        print("Training cancelled.")
+            return 1
     
-    # Example: Load model for inference
-    # model, checkpoint = load_model("model_checkpoints/robot_cnn_best.pth")
-    # model.eval()  # For inference
+    elif args.mode == 'test':
+        # Determine model path
+        if args.model_path:
+            model_path = args.model_path
+        else:
+            model_path = os.path.join(args.model_dir, "robot_cnn_best.pth")
+        
+        if not os.path.exists(model_path):
+            print(f"Error: Model file {model_path} not found!")
+            return 1
+        
+        # Determine episode to test
+        if args.test_episode:
+            test_episode_dir = args.test_episode
+        else:
+            # Use first episode in input directory
+            episodes = sorted(Path(args.input_dir).glob("episode_*"))
+            if not episodes:
+                print(f"Error: No episodes found in {args.input_dir}")
+                return 1
+            test_episode_dir = str(episodes[0])
+        
+        if not os.path.exists(test_episode_dir):
+            print(f"Error: Test episode directory {test_episode_dir} not found!")
+            return 1
+        
+        print(f"\nTesting model {model_path} on episode {test_episode_dir}...")
+        try:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            test_model_on_episode(model_path, test_episode_dir, device)
+        except Exception as e:
+            print(f"Error during testing: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main())
