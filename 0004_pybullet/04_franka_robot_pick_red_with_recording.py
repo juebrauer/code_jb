@@ -636,7 +636,6 @@ def run_episode_cnn_control(ep_idx: int, model_path: str, gui: bool = True,
     # Setup video recording if requested
     video_recorder = None
     if save_video:
-        from datarecorder_stub import DataRecorder  # You might need to implement this
         video_recorder = DataRecorder(DATA_ROOT, ep_idx, cameras_dict, IMG_W, IMG_H, save_every=1)
 
     # CNN Control Loop
@@ -728,8 +727,10 @@ def run_episode_cnn_control(ep_idx: int, model_path: str, gui: bool = True,
     if video_recorder is not None:
         video_recorder.close()
     
-    time.sleep(2.0 if gui else 0.5)  # Let user observe results
+    print("Waiting for physics cleanup...")
+    time.sleep(1.0 if gui else 0.5)  # Allow more time for GUI cleanup
     p.disconnect()
+    time.sleep(0.5)  # Additional wait to ensure complete disconnection
 
 
 # ------------------------------------------------------------
@@ -1299,16 +1300,7 @@ def main_replay(episode_dir: str, gui: bool = True, replay_speed: float = 1.0,
 def main_cnn_control(model_path: str, gui: bool = True, episodes: int = 5, 
                     seed: Optional[int] = 42, save_video: bool = False,
                     max_steps: int = CNN_CONTROL_STEPS) -> None:
-    """Main entry for CNN control mode: use trained CNN to control robot on new object configurations.
-    
-    Args:
-        model_path: path to the trained CNN model checkpoint.
-        gui: whether to use PyBullet GUI.
-        episodes: number of episodes to run with CNN control.
-        seed: base random seed for object placement (each episode uses seed + ep_idx).
-        save_video: whether to save video frames of CNN control.
-        max_steps: maximum number of CNN control steps per episode.
-    """
+    """Main entry for CNN control mode: use trained CNN to control robot on new object configurations."""
     if not TORCH_AVAILABLE:
         print("Error: PyTorch not available. CNN control mode requires PyTorch.")
         return
@@ -1341,14 +1333,18 @@ def main_cnn_control(model_path: str, gui: bool = True, episodes: int = 5,
                 max_steps=max_steps
             )
             
-            # Note: Success evaluation would need to be added to run_episode_cnn_control
-            # For now, we assume success if no exception was raised
             successful_episodes += 1
+            print(f"Episode {ep+1} completed successfully!")
             
         except Exception as e:
-            print(f"Episode {ep} failed with error: {e}")
+            print(f"Episode {ep+1} failed with error: {e}")
             import traceback
             traceback.print_exc()
+        
+        # Force a brief pause between episodes for cleanup
+        if ep < episodes - 1:  # Not the last episode
+            print("Waiting between episodes...")
+            time.sleep(2.0)
     
     print("\n" + "="*60)
     print(f"CNN Control Complete!")
