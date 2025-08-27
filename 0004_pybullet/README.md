@@ -26,12 +26,25 @@ Example usage:\
 
 ## `04_franka_robot_pick_red_with_recording.py`
 The same robot arm that picks and places a red object per episode.
-Camera views and actions are being recorded.
+Camera views and actions are being recorded, model can be tested.
 
-Example usage:\
-`python 04_franka_robot_pick_red_with_recording.py --episodes 100 --seed 42 --save-every 10 record`
+Example usage for recording:\
+`python 04_franka_robot_pick_red_with_recording.py record --episodes 100 --seed 42 --save-every 10`
 
 The recorded sequences will be stored in a folder with name `data`.
+
+Example usage for controlling the robot arm using a trained CNN model:
+`python 04_franka_robot_pick_red_with_recording.py control --model-path model_checkpoints/robot_cnn_best.pth --episodes 5`
+
+or
+
+`python 04_franka_robot_pick_red_with_recording.py control \
+    --model-path model_checkpoints/robot_cnn_best.pth \
+    --episodes 3 \
+    --seed 456 \
+    --max-steps 300 \
+    --save-video \
+    --gui`
 
 
 
