@@ -1,6 +1,6 @@
 # Overview
 
-Hinton proposed an alternative to Backpropagation in 2022:
+Hinton proposed an alternative to Backpropagation in 2022:\
 [Paper: The Forward-Forward Algorithm: Some Preliminary Investigations](https://arxiv.org/pdf/2212.13345)
 
 - The Forward-Forward algorithm is an alternative to backpropagation for training neural networks, proposed by Geoffrey Hinton in 2022.
