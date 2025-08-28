@@ -2,11 +2,12 @@
 
 This is a dataset that can be used to train a robot arm with machine learning.
 
-Filename: `data_franka_pick_and_place_100episodes.zip`
-File size: 3.5 GB
+Filename: `data_franka_pick_and_place_100episodes.zip`\
+File size: 3.5 GB\
 Download: [Download link](https://datasetsml.sfo3.cdn.digitaloceanspaces.com/data_franka_pick_and_place_100episodes.zip)
 
 It contains 100 episodes in which a [Franka Robotics](https://franka.de/) robot arm stands on a table with some blocks. One of these blocks has a red color and the robot tries to pick it (using inverse kinematics) and place it then in a green small region on the table.
+
 
 
 # Directory structure
@@ -46,7 +47,11 @@ data_franka_pick_and_place_100episodes
     ... ...
 </pre>
 
+
+
 # Action file: `actions.csv`
+
+Example file:
 
 <pre><code>
 frame,top_image,side_image,front_image,corner_image,ee_tx,ee_ty,ee_tz,ee_qx,ee_qy,ee_qz,ee_qw,q0,q1,q2,q3,q4,q5,q6,gripper_open_width
@@ -84,9 +89,12 @@ frame,top_image,side_image,front_image,corner_image,ee_tx,ee_ty,ee_tz,ee_qx,ee_q
 | `gripper_open_width` | Opening width of gripper fingers (meters, 0.0 = closed, ~0.08 = fully open) |
 
 
+
 # Initial block positions file: `initial_positions.csv`
 
 The x,y start coordinates are random. There is exactly one red block and 10 gray blocks.
+
+Example file:
 
 <pre><code>
 object_id,body_id,color,x,y,z
@@ -105,7 +113,10 @@ object_id,body_id,color,x,y,z
 </code></pre>
 
 
+
 # Validation result file: `validation_result.csv`
+
+Example file:
 
 <pre><code>
 Metric,Value
