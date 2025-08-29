@@ -1,5 +1,8 @@
 import os
-import math, time, random, csv
+import math
+import time
+import random
+import csv
 from typing import List, Tuple, Optional, Dict
 import argparse
 
@@ -34,7 +37,7 @@ N_OBJECTS = 12
 # Colors
 GRAY = (0.5, 0.5, 0.5, 1.0)
 RED  = (1.0, 0.0, 0.0, 1.0)
-GREEN = (0.0, 0.8, 0.0, 1.0)       # Farbe für die Zielfläche
+GREEN = (0.0, 0.8, 0.0, 1.0)       # Color for target surface
 
 # Spacing / safety margins
 EDGE_MARGIN = 0.12                 # keep objects away from table edges (meters)
@@ -61,13 +64,13 @@ REPLAY_STEP_TIME = 0.05  # Time to wait after setting each action in replay mode
 
 
 # ------------------------------------------------------------
-# CNN Model Definition (copied from 05_train_and_test_cnn.py)
+# Improved CNN Model Definition
 # ------------------------------------------------------------
 if TORCH_AVAILABLE:
     class RobotCNN(nn.Module):
-        """CNN for robot action prediction from 4 camera views"""
+        """CNN for robot action prediction from 4 camera views - Joint-Space only"""
         
-        def __init__(self, action_dim=15, image_size=224):
+        def __init__(self, action_dim=8, image_size=224):
             super(RobotCNN, self).__init__()
             self.image_size = image_size
             self.action_dim = action_dim
@@ -102,18 +105,15 @@ if TORCH_AVAILABLE:
                 nn.AdaptiveAvgPool2d((4, 4))
             )
             
-            # Fully Connected Layers
+            # Smaller Fully Connected Layers for 8 outputs
             self.classifier = nn.Sequential(
-                nn.Dropout(0.5),
-                nn.Linear(512 * 4 * 4, 1024),
-                nn.ReLU(inplace=True),
                 nn.Dropout(0.3),
-                nn.Linear(1024, 512),
+                nn.Linear(512 * 4 * 4, 256),
                 nn.ReLU(inplace=True),
                 nn.Dropout(0.2),
-                nn.Linear(512, 256),
+                nn.Linear(256, 128),
                 nn.ReLU(inplace=True),
-                nn.Linear(256, self.action_dim)
+                nn.Linear(128, self.action_dim)
             )
         
         def forward(self, x):
@@ -162,9 +162,9 @@ def create_green_target_surface(center=(0.25, -0.25), size=(0.16, 0.12)) -> Tupl
     """Create a green flat surface on the table where the red block should be placed."""
     cx, cy = center
     sx, sy = size
-    thickness = 0.003  # Sehr dünne Fläche
+    thickness = 0.003  # Very thin surface
     
-    # Erstelle die grüne Zielfläche
+    # Create the green target surface
     col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[sx * 0.5, sy * 0.5, thickness * 0.5])
     vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[sx * 0.5, sy * 0.5, thickness * 0.5], 
                               rgbaColor=GREEN)
@@ -172,7 +172,7 @@ def create_green_target_surface(center=(0.25, -0.25), size=(0.16, 0.12)) -> Tupl
                                baseVisualShapeIndex=vis,
                                basePosition=[cx, cy, TABLE_TOP_Z + thickness * 0.5])
     
-    # Die Drop-Position ist leicht über der grünen Fläche
+    # The drop position is slightly above the green surface
     drop_pos = (cx, cy, TABLE_TOP_Z + thickness + OBJ_HALF + 0.001)
     
     return surface, drop_pos
@@ -326,7 +326,7 @@ def setup_cameras() -> dict:
     top_proj = p.computeProjectionMatrixFOV(fov=60.0, aspect=IMG_W / IMG_H, nearVal=0.01, farVal=3.0)
     cameras['top'] = (top_view, top_proj)
 
-    # 2. Side camera: CORRECTED - now truly parallel to table
+    # 2. Side camera: parallel to table
     side_eye = [0.0, 0.75, TABLE_TOP_Z + 0.10]
     side_target = [0.0, 0.0, TABLE_TOP_Z + 0.10]
     side_up = [0, 0, 1]
@@ -430,10 +430,10 @@ def validate_red_on_green(red_obj: int, green_center: Tuple[float, float],
 
 
 # ------------------------------------------------------------
-# CNN Control Functions
+# Improved CNN Control Functions
 # ------------------------------------------------------------
 if TORCH_AVAILABLE:
-    def load_cnn_model(model_path: str, device: torch.device) -> RobotCNN:
+    def load_cnn_model(model_path: str, device: torch.device) -> Tuple[RobotCNN, Dict]:
         """Load a trained CNN model from checkpoint."""
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -494,32 +494,31 @@ if TORCH_AVAILABLE:
         
         return combined_image
 
-    def apply_cnn_action(robot: int, arm_joints: List[int], finger_joints: List[int], 
-                        action_vector: np.ndarray, smoothing_factor: float = 0.3) -> None:
-        """Apply the CNN-predicted action vector to the robot."""
-        # Parse action vector (15 dimensions)
-        if len(action_vector) != 15:
-            print(f"Warning: Expected 15-dim action vector, got {len(action_vector)}")
-            return
+    def apply_cnn_action_joints_only(robot: int, arm_joints: List[int], finger_joints: List[int], 
+                                    action_vector: np.ndarray) -> Dict:
+        """Apply the CNN-predicted action vector to the robot using Joint-Space control only."""
+        # Parse action vector (8 dimensions: 7 joints + gripper)
+        if len(action_vector) != 8:
+            print(f"Warning: Expected 8-dim action vector, got {len(action_vector)}")
+            return {}
         
         # Extract components
-        ee_pos = action_vector[:3]
-        ee_quat = action_vector[3:7]  # [x, y, z, w]
-        joint_targets = action_vector[7:14]  # 7 joint angles
-        gripper_width = action_vector[14]
+        joint_targets = action_vector[:7]  # 7 joint angles
+        gripper_width = action_vector[7]   # 1 gripper value
         
-        # Clamp values to reasonable ranges
-        ee_pos = np.clip(ee_pos, [-1.0, -1.0, 0.4], [1.0, 1.0, 1.2])
-        ee_quat = ee_quat / np.linalg.norm(ee_quat)  # Normalize quaternion
+        # Clamp values to reasonable ranges for safety
         joint_targets = np.clip(joint_targets, -2.8, 2.8)  # Typical Panda joint limits
         gripper_width = np.clip(gripper_width, 0.0, 0.08)
         
-        # Apply joint targets with force control
+        # Apply joint targets with more conservative gains for stability
+        position_gains = [0.6] * 7  # Lower gains for smoother movement
+        velocity_gains = [0.2] * 7
+        
         p.setJointMotorControlArray(robot, arm_joints[:7], p.POSITION_CONTROL,
                                    targetPositions=joint_targets,
                                    forces=[ARM_FORCE] * 7,
-                                   positionGains=[0.8] * 7,  # Slightly lower gains for smoother movement
-                                   velocityGains=[0.3] * 7)
+                                   positionGains=position_gains,
+                                   velocityGains=velocity_gains)
         
         # Apply gripper control
         gripper_target = clamp(gripper_width * 0.5, 0.0, 0.045)
@@ -528,232 +527,299 @@ if TORCH_AVAILABLE:
                                    forces=[FINGER_FORCE] * len(finger_joints))
         
         return {
-            'ee_pos': ee_pos,
-            'ee_quat': ee_quat,
             'joint_targets': joint_targets,
             'gripper_width': gripper_width
         }
 
+    def run_episode_cnn_control(ep_idx: int, model_path: str, gui: bool = True, 
+                               seed: Optional[int] = None, save_video: bool = False,
+                               max_steps: int = CNN_CONTROL_STEPS) -> None:
+        """Run an episode using improved CNN control with Joint-Space actions only."""
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch not available. CNN control mode requires PyTorch.")
+        
+        print(f"\n--- Improved CNN Control Episode {ep_idx} ---")
+        print(f"Model: {model_path}")
+        print(f"Seed: {seed}")
+        print(f"Max steps: {max_steps}")
+        print("Using Joint-Space control (8 dimensions)")
+        
+        # Setup PyBullet
+        p.connect(p.GUI if gui else p.DIRECT)
+        p.setAdditionalSearchPath(pd.getDataPath())
+        p.resetSimulation()
+        p.setGravity(0, 0, -9.81)
+        p.setTimeStep(DT)
+        p.setRealTimeSimulation(0)
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
 
-# ------------------------------------------------------------
-# Main Episode Functions
-# ------------------------------------------------------------
-def run_episode_cnn_control(ep_idx: int, model_path: str, gui: bool = True, 
-                           seed: Optional[int] = None, save_video: bool = False,
-                           max_steps: int = CNN_CONTROL_STEPS) -> None:
-    """Run an episode using CNN control: spawn objects and let the CNN control the robot.
-    
-    Args:
-        ep_idx: episode index for naming and seeding.
-        model_path: path to the trained CNN model checkpoint.
-        gui: whether to use PyBullet GUI.
-        seed: optional random seed for object placement.
-        save_video: whether to save video frames of the CNN control.
-        max_steps: maximum number of CNN control steps.
-    """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch not available. CNN control mode requires PyTorch.")
-    
-    print(f"\n--- CNN Control Episode {ep_idx} ---")
-    print(f"Model: {model_path}")
-    print(f"Seed: {seed}")
-    print(f"Max steps: {max_steps}")
-    
-    # Setup PyBullet
-    p.connect(p.GUI if gui else p.DIRECT)
-    p.setAdditionalSearchPath(pd.getDataPath())
-    p.resetSimulation()
-    p.setGravity(0, 0, -9.81)
-    p.setTimeStep(DT)
-    p.setRealTimeSimulation(0)
-    p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+        # Set optimal camera view for observation
+        if gui:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=1.2,
+                cameraYaw=45,
+                cameraPitch=-30,
+                cameraTargetPosition=[0.0, 0.0, TABLE_TOP_Z + 0.1]
+            )
 
-    # Set optimal corner view for better observation
-    if gui:
-        p.resetDebugVisualizerCamera(
-            cameraDistance=1.0,
-            cameraYaw=45,
-            cameraPitch=-25,
-            cameraTargetPosition=[0.1, 0.0, TABLE_TOP_Z + 0.1]
+        # Environment setup
+        p.loadURDF("plane.urdf")
+        _table = create_table()
+        panda_base_pos = [-0.35, 0.0, TABLE_TOP_Z + 0.001]
+        panda = p.loadURDF("franka_panda/panda.urdf", basePosition=panda_base_pos, useFixedBase=True)
+
+        # Increase finger friction
+        left_finger = get_link_index_by_name(panda, "leftfinger")
+        right_finger = get_link_index_by_name(panda, "rightfinger")
+        for lf in [left_finger, right_finger]:
+            if lf is not None:
+                set_friction(panda, lf, lateral=2.0)
+
+        # Joints and EE
+        arm = joint_indices(panda)
+        _, fingers = joint_indices(panda, include_fingers=True)
+
+        # Green target surface
+        green_center = (0.25, -0.25)
+        green_size = (0.18, 0.14)
+        _, drop_pos = create_green_target_surface(center=green_center, size=green_size)
+
+        # Spawn objects with spacing constraints
+        objs, red_obj, _ = spawn_boxes_gray_and_one_red(
+            N_OBJECTS, seed=seed,
+            avoid_center=tuple(panda_base_pos),
+            avoid_radius=RED_MIN_DIST_FROM_ROBOT,
+            clearance_red=CLEARANCE_RED,
+            clearance_any=CLEARANCE_ANY,
+            green_surface_center=green_center,
+            green_surface_size=green_size
         )
-    
-    # Set camera to corner view for better observation
-    if gui:
-        p.resetDebugVisualizerCamera(
-            cameraDistance=1.0,           # Good distance to see everything
-            cameraYaw=45,                 # Corner view (45 degrees)
-            cameraPitch=-25,              # Angled downward to see table and robot
-            cameraTargetPosition=[0.1, 0.0, TABLE_TOP_Z + 0.1]  # Focus slightly forward on table
-        )
-    
-    # Restore camera state if available (but override with our preferred view)
-    # if gui:
-    #     restore_camera_state()  # Commented out to keep our close side view
+        
+        print(f"Spawned {len(objs)} objects (red object ID: {red_obj})")
 
-    # Environment setup
-    p.loadURDF("plane.urdf")
-    _table = create_table()
-    panda_base_pos = [-0.35, 0.0, TABLE_TOP_Z + 0.001]
-    panda = p.loadURDF("franka_panda/panda.urdf", basePosition=panda_base_pos, useFixedBase=True)
+        # Wait for physics settling
+        step(240)
 
-    # Increase finger friction
-    left_finger = get_link_index_by_name(panda, "leftfinger")
-    right_finger = get_link_index_by_name(panda, "rightfinger")
-    for lf in [left_finger, right_finger]:
-        if lf is not None:
-            set_friction(panda, lf, lateral=2.0)
+        # Initialize robot to home position
+        home_joints = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+        p.setJointMotorControlArray(panda, arm[:7], p.POSITION_CONTROL, 
+                                   targetPositions=home_joints, forces=[ARM_FORCE] * 7)
+        step(int(1.0 / DT))
 
-    # Joints and EE
-    arm = joint_indices(panda)
-    _, fingers = joint_indices(panda, include_fingers=True)
-    ee = get_link_index_by_name(panda, "panda_hand")
-    assert ee is not None, "End-effector link not found"
+        # Load CNN model
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device: {device}")
+        
+        try:
+            model, checkpoint = load_cnn_model(model_path, device)
+            image_size = checkpoint['image_size']
+            
+            # Verify model dimensions
+            expected_action_dim = 8
+            if checkpoint['action_dim'] != expected_action_dim:
+                print(f"Warning: Model has {checkpoint['action_dim']} action dims, expected {expected_action_dim}")
+                
+        except Exception as e:
+            print(f"Failed to load model: {e}")
+            p.disconnect()
+            return
 
-    # Green target surface
-    green_center = (0.25, -0.25)
-    green_size = (0.18, 0.14)
-    _, drop_pos = create_green_target_surface(center=green_center, size=green_size)
+        # Setup cameras
+        cameras_dict = setup_cameras()
+        
+        # Setup video recording if requested
+        video_recorder = None
+        if save_video:
+            video_recorder = DataRecorder(DATA_ROOT, ep_idx, cameras_dict, IMG_W, IMG_H, save_every=1)
 
-    # Spawn objects with spacing constraints (avoiding green surface)
-    objs, red_obj, initial_positions = spawn_boxes_gray_and_one_red(
-        N_OBJECTS, seed=seed,
-        avoid_center=tuple(panda_base_pos),
-        avoid_radius=RED_MIN_DIST_FROM_ROBOT,
-        clearance_red=CLEARANCE_RED,
-        clearance_any=CLEARANCE_ANY,
-        green_surface_center=green_center,
-        green_surface_size=green_size
-    )
-    
-    print(f"Spawned {len(objs)} objects (red object ID: {red_obj})")
-
-    # Wait for physics settling
-    step(240)
-
-    # Initialize robot to home position
-    home_joints = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
-    p.setJointMotorControlArray(panda, arm[:7], p.POSITION_CONTROL, 
-                               targetPositions=home_joints, forces=[ARM_FORCE] * 7)
-    step(int(1.0 / DT))
-
-    # Load CNN model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    
-    try:
-        model, checkpoint = load_cnn_model(model_path, device)
-        image_size = checkpoint['image_size']
-    except Exception as e:
-        print(f"Failed to load model: {e}")
+        # Improved CNN Control Loop
+        print("Starting improved CNN control...")
+        step_count = 0
+        action_history = []
+        stability_buffer = []  # For movement stability
+        
+        # Performance tracking
+        initial_red_pos, _ = p.getBasePositionAndOrientation(red_obj)
+        best_distance_to_target = float('inf')
+        success_frames = 0
+        
+        with torch.no_grad():
+            for step_idx in range(max_steps):
+                try:
+                    # Capture current scene
+                    combined_image = capture_images_for_cnn(cameras_dict, image_size)
+                    combined_image = combined_image.to(device)
+                    
+                    # Get CNN prediction
+                    predicted_action = model(combined_image)
+                    action_vector = predicted_action[0].cpu().numpy()  # Remove batch dimension
+                    
+                    # Stability control - avoid large jumps
+                    if len(stability_buffer) > 0:
+                        prev_action = stability_buffer[-1]
+                        action_diff = np.abs(action_vector - prev_action)
+                        max_joint_change = np.max(action_diff[:7])
+                        
+                        if max_joint_change > 0.5:  # Large joint angle change detected
+                            # Apply smoothing
+                            blend_factor = 0.3
+                            action_vector = blend_factor * action_vector + (1 - blend_factor) * prev_action
+                    
+                    # Update stability buffer (rolling window)
+                    stability_buffer.append(action_vector.copy())
+                    if len(stability_buffer) > 5:
+                        stability_buffer.pop(0)
+                    
+                    action_history.append(action_vector.copy())
+                    
+                    # Apply action to robot using improved joint-space control
+                    action_info = apply_cnn_action_joints_only(panda, arm, fingers, action_vector)
+                    
+                    # Progress tracking
+                    red_pos, _ = p.getBasePositionAndOrientation(red_obj)
+                    distance_to_target = math.sqrt((red_pos[0] - green_center[0])**2 + 
+                                                 (red_pos[1] - green_center[1])**2)
+                    
+                    if distance_to_target < best_distance_to_target:
+                        best_distance_to_target = distance_to_target
+                    
+                    # Check for success (red object near green surface)
+                    if distance_to_target < 0.08:  # Very close to target
+                        success_frames += 1
+                        if success_frames > 20:  # Stable for 20 frames
+                            print(f"Success! Red object reached target after {step_idx} steps")
+                            break
+                    else:
+                        success_frames = 0
+                    
+                    # Debug output every 25 steps
+                    if step_idx % 25 == 0:
+                        joint_str = f"[{action_info['joint_targets'][0]:.2f}, {action_info['joint_targets'][1]:.2f}, {action_info['joint_targets'][2]:.2f}]"
+                        print(f"Step {step_idx:3d}: Joints {joint_str}, "
+                              f"Gripper: {action_info['gripper_width']:.3f}, "
+                              f"Dist: {distance_to_target:.3f}m")
+                    
+                    # Record video frame if requested
+                    if video_recorder is not None:
+                        video_recorder.next_frame(action_vector.tolist())
+                    
+                    # Advance simulation
+                    step(max(1, int(CNN_ACTION_DELAY / DT)))
+                    step_count += 1
+                    
+                except Exception as e:
+                    print(f"Error at step {step_idx}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    break
+        
+        print(f"CNN control completed after {step_count} steps")
+        
+        # Wait for final settling
+        step(int(0.5 / DT))
+        
+        # Final validation
+        success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
+        
+        print(f"\n--- Improved CNN Control Results ---")
+        print(f"Steps executed: {step_count}")
+        print(f"Best distance to target: {best_distance_to_target:.3f}m")
+        if validation_info['success']:
+            print("SUCCESS: CNN successfully placed red object on green surface!")
+            print(f"  Position offsets: x={validation_info['x_offset_from_center']:.3f}m, "
+                  f"y={validation_info['y_offset_from_center']:.3f}m")
+        else:
+            print("TASK NOT COMPLETED")
+            print(f"  X in bounds: {validation_info['x_in_bounds']}")
+            print(f"  Y in bounds: {validation_info['y_in_bounds']}")
+            print(f"  Z correct: {validation_info['z_correct']}")
+            final_red_pos, _ = p.getBasePositionAndOrientation(red_obj)
+            final_distance = math.sqrt((final_red_pos[0] - green_center[0])**2 + 
+                                     (final_red_pos[1] - green_center[1])**2)
+            print(f"  Final distance: {final_distance:.3f}m")
+        
+        print(f"Final red object position: [{validation_info['red_position'][0]:.3f}, "
+              f"{validation_info['red_position'][1]:.3f}, {validation_info['red_position'][2]:.3f}]")
+        
+        # Save camera state for next episode
+        if gui:
+            save_camera_state()
+        
+        # Cleanup
+        if video_recorder is not None:
+            video_recorder.close()
+        
+        print("Waiting for physics cleanup...")
+        time.sleep(1.0 if gui else 0.5)
         p.disconnect()
-        return
-
-    # Setup cameras
-    cameras_dict = setup_cameras()
-    
-    # Setup video recording if requested
-    video_recorder = None
-    if save_video:
-        video_recorder = DataRecorder(DATA_ROOT, ep_idx, cameras_dict, IMG_W, IMG_H, save_every=1)
-
-    # CNN Control Loop
-    print("Starting CNN control...")
-    step_count = 0
-    action_history = []
-    
-    with torch.no_grad():
-        for step_idx in range(max_steps):
-            try:
-                # Capture current scene
-                combined_image = capture_images_for_cnn(cameras_dict, image_size)
-                combined_image = combined_image.to(device)
-                
-                # Get CNN prediction
-                predicted_action = model(combined_image)
-                action_vector = predicted_action[0].cpu().numpy()  # Remove batch dimension
-                
-                # Apply smoothing to avoid jittery movements
-                if step_idx > 0 and action_history:
-                    prev_action = action_history[-1]
-                    smoothing = 0.7  # Higher = more smoothing
-                    action_vector = smoothing * action_vector + (1 - smoothing) * prev_action
-                
-                action_history.append(action_vector.copy())
-                
-                # Apply action to robot
-                action_info = apply_cnn_action(panda, arm, fingers, action_vector)
-                
-                # Debug output every 20 steps
-                if step_idx % 20 == 0:
-                    print(f"Step {step_idx:3d}: Action applied")
-                    print(f"  EE pos: [{action_info['ee_pos'][0]:.3f}, {action_info['ee_pos'][1]:.3f}, {action_info['ee_pos'][2]:.3f}]")
-                    print(f"  Gripper: {action_info['gripper_width']:.3f}")
-                
-                # Record video frame if requested
-                if video_recorder is not None:
-                    video_recorder.next_frame(action_vector.tolist())
-                
-                # Advance simulation
-                step(max(1, int(CNN_ACTION_DELAY / DT)))
-                step_count += 1
-                
-                # Check if task might be completed (red object near green surface)
-                red_pos, _ = p.getBasePositionAndOrientation(red_obj)
-                distance_to_target = math.sqrt((red_pos[0] - green_center[0])**2 + 
-                                             (red_pos[1] - green_center[1])**2)
-                
-                if distance_to_target < 0.1:  # 10cm from target center
-                    print(f"Red object near target! Distance: {distance_to_target:.3f}m")
-                    # Continue for a few more steps to see if it's stable
-                    if step_idx > max_steps * 0.8:  # Only in later part of episode
-                        print("Ending early - red object appears to be at target")
-                        break
-                
-            except Exception as e:
-                print(f"Error at step {step_idx}: {e}")
-                import traceback
-                traceback.print_exc()
-                break
-    
-    print(f"CNN control completed after {step_count} steps")
-    
-    # Wait for final settling
-    step(int(1.0 / DT))
-    
-    # Final validation
-    success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
-    
-    print(f"\n--- CNN Control Results ---")
-    if validation_info['success']:
-        print("✓ SUCCESS: CNN successfully placed red object on green surface!")
-        print(f"  Position offsets: x={validation_info['x_offset_from_center']:.3f}m, "
-              f"y={validation_info['y_offset_from_center']:.3f}m")
-    else:
-        print("✗ FAILED: CNN did not successfully complete the task")
-        print(f"  X in bounds: {validation_info['x_in_bounds']}")
-        print(f"  Y in bounds: {validation_info['y_in_bounds']}")
-        print(f"  Z correct: {validation_info['z_correct']}")
-    
-    print(f"Final red object position: [{validation_info['red_position'][0]:.3f}, "
-          f"{validation_info['red_position'][1]:.3f}, {validation_info['red_position'][2]:.3f}]")
-    
-    # Save camera state for next episode
-    if gui:
-        save_camera_state()
-    
-    # Cleanup
-    if video_recorder is not None:
-        video_recorder.close()
-    
-    print("Waiting for physics cleanup...")
-    time.sleep(1.0 if gui else 0.5)  # Allow more time for GUI cleanup
-    p.disconnect()
-    time.sleep(0.5)  # Additional wait to ensure complete disconnection
+        time.sleep(0.5)
 
 
 # ------------------------------------------------------------
-# Original Functions (kept from your original script)
+# Data Recording and Utility Classes
 # ------------------------------------------------------------
+class DataRecorder:
+    """Utility to record camera frames and action vectors for imitation learning."""
+
+    def __init__(self, root: str, ep_idx: int, cameras_dict: dict, img_w: int = IMG_W, img_h: int = IMG_H, save_every: int = 1):
+        self.ep_idx = ep_idx
+        self.img_w = img_w
+        self.img_h = img_h
+        self.cameras_dict = cameras_dict
+        self.frame = 0
+        self.save_every = max(1, int(save_every))
+
+        # Create directories
+        self.base_dir = os.path.join(root, f"episode_{ep_idx:04d}")
+        self.cam_dirs = {}
+        for cam_name in cameras_dict.keys():
+            cam_dir = os.path.join(self.base_dir, cam_name)
+            os.makedirs(cam_dir, exist_ok=True)
+            self.cam_dirs[cam_name] = cam_dir
+
+        # Open CSV for action logging
+        self.csv_path = os.path.join(self.base_dir, "actions.csv")
+        self.csv_file = open(self.csv_path, "w", newline="")
+        self.writer = csv.writer(self.csv_file)
+        
+        header = ["frame"] + [f"{cam}_image" for cam in cameras_dict.keys()] + [
+            "ee_tx", "ee_ty", "ee_tz",
+            "ee_qx", "ee_qy", "ee_qz", "ee_qw",
+            "q0","q1","q2","q3","q4","q5","q6",
+            "gripper_open_width",
+        ]
+        self.writer.writerow(header)
+
+    def _save_camera(self, view, proj, path: str) -> None:
+        """Capture current scene with provided camera matrices and save PNG to path."""
+        w, h, rgba, _, _ = p.getCameraImage(self.img_w, self.img_h, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
+        rgba = np.array(rgba, dtype=np.uint8)
+        rgb = np.reshape(rgba, (h, w, 4))[:, :, :3]
+        Image.fromarray(rgb).save(path)
+
+    def next_frame(self, action_vec: List[float]) -> None:
+        """Capture all cameras and append the given action vector for the current frame."""
+        should_save = (self.frame % self.save_every == 0)
+        if should_save:
+            image_paths = []
+            for cam_name, (view, proj) in self.cameras_dict.items():
+                img_name = f"{cam_name}_{self.frame:06d}.png"
+                img_path = os.path.join(self.cam_dirs[cam_name], img_name)
+                self._save_camera(view, proj, img_path)
+                image_paths.append(os.path.relpath(img_path, self.base_dir))
+            
+            row = [self.frame] + image_paths + action_vec
+            self.writer.writerow(row)
+        self.frame += 1
+
+    def close(self):
+        """Close any file handles held by the recorder."""
+        try:
+            self.csv_file.close()
+        except Exception:
+            pass
+
+
 def load_initial_positions(csv_path: str) -> List[Dict]:
     """Load initial object positions from CSV file."""
     positions_info = []
@@ -859,78 +925,19 @@ def save_validation_result(ep_idx: int, validation_info: Dict) -> None:
             writer.writerow([key, value])
     
     if validation_info['success']:
-        print(f"✓ Episode {ep_idx}: Validation SUCCESSFUL - Red object correctly placed on green surface")
+        print(f"Episode {ep_idx}: Validation SUCCESSFUL - Red object correctly placed on green surface")
         print(f"  Position offsets from center: x={validation_info['x_offset_from_center']:.3f}m, "
               f"y={validation_info['y_offset_from_center']:.3f}m")
     else:
-        print(f"✗ Episode {ep_idx}: Validation FAILED - Red object NOT on green surface")
+        print(f"Episode {ep_idx}: Validation FAILED - Red object NOT on green surface")
         print(f"  X in bounds: {validation_info['x_in_bounds']}, "
               f"Y in bounds: {validation_info['y_in_bounds']}, "
               f"Z correct: {validation_info['z_correct']}")
 
 
-class DataRecorder:
-    """Utility to record camera frames and action vectors for imitation learning."""
-
-    def __init__(self, root: str, ep_idx: int, cameras_dict: dict, img_w: int = IMG_W, img_h: int = IMG_H, save_every: int = 1):
-        self.ep_idx = ep_idx
-        self.img_w = img_w
-        self.img_h = img_h
-        self.cameras_dict = cameras_dict
-        self.frame = 0
-        self.save_every = max(1, int(save_every))
-
-        # Create directories
-        self.base_dir = os.path.join(root, f"episode_{ep_idx:04d}")
-        self.cam_dirs = {}
-        for cam_name in cameras_dict.keys():
-            cam_dir = os.path.join(self.base_dir, cam_name)
-            os.makedirs(cam_dir, exist_ok=True)
-            self.cam_dirs[cam_name] = cam_dir
-
-        # Open CSV for action logging
-        self.csv_path = os.path.join(self.base_dir, "actions.csv")
-        self.csv_file = open(self.csv_path, "w", newline="")
-        self.writer = csv.writer(self.csv_file)
-        
-        header = ["frame"] + [f"{cam}_image" for cam in cameras_dict.keys()] + [
-            "ee_tx", "ee_ty", "ee_tz",
-            "ee_qx", "ee_qy", "ee_qz", "ee_qw",
-            "q0","q1","q2","q3","q4","q5","q6",
-            "gripper_open_width",
-        ]
-        self.writer.writerow(header)
-
-    def _save_camera(self, view, proj, path: str) -> None:
-        """Capture current scene with provided camera matrices and save PNG to path."""
-        w, h, rgba, _, _ = p.getCameraImage(self.img_w, self.img_h, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
-        rgba = np.array(rgba, dtype=np.uint8)
-        rgb = np.reshape(rgba, (h, w, 4))[:, :, :3]
-        Image.fromarray(rgb).save(path)
-
-    def next_frame(self, action_vec: List[float]) -> None:
-        """Capture all cameras and append the given action vector for the current frame."""
-        should_save = (self.frame % self.save_every == 0)
-        if should_save:
-            image_paths = []
-            for cam_name, (view, proj) in self.cameras_dict.items():
-                img_name = f"{cam_name}_{self.frame:06d}.png"
-                img_path = os.path.join(self.cam_dirs[cam_name], img_name)
-                self._save_camera(view, proj, img_path)
-                image_paths.append(os.path.relpath(img_path, self.base_dir))
-            
-            row = [self.frame] + image_paths + action_vec
-            self.writer.writerow(row)
-        self.frame += 1
-
-    def close(self):
-        """Close any file handles held by the recorder."""
-        try:
-            self.csv_file.close()
-        except Exception:
-            pass
-
-
+# ------------------------------------------------------------
+# Robot Control Helper Functions
+# ------------------------------------------------------------
 def set_gripper(robot: int, finger_joints: List[int], open_width: float = 0.08, speed_steps: int = 60,
                 recorder: Optional[DataRecorder] = None, arm_joint_targets: Optional[List[float]] = None,
                 ee_target: Optional[Tuple[List[float], List[float]]] = None) -> None:
@@ -1011,7 +1018,7 @@ def replay_action(robot: int, arm_joints: List[int], finger_joints: List[int], a
 
 
 # ------------------------------------------------------------
-# Original Main Functions (kept from your script)
+# Main Episode Functions
 # ------------------------------------------------------------
 def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None, 
                       save_every: int = 1, first_episode: bool = False) -> None:
@@ -1032,10 +1039,6 @@ def run_episode_record(ep_idx: int, gui: bool = True, seed: Optional[int] = None
             cameraPitch=-25,
             cameraTargetPosition=[0.1, 0.0, TABLE_TOP_Z + 0.1]
         )
-    
-    # Comment out camera state restoration to keep our preferred view
-    # if not first_episode and gui:
-    #     restore_camera_state()
 
     # Environment
     p.loadURDF("plane.urdf")
@@ -1248,11 +1251,11 @@ def run_episode_replay(ep_idx: int, initial_positions_path: str, actions_path: s
     success, validation_info = validate_red_on_green(red_obj, green_center, green_size)
     print(f"\nReplay validation result:")
     if validation_info['success']:
-        print(f"✓ Replay SUCCESSFUL - Red object correctly placed on green surface")
+        print(f"Replay SUCCESSFUL - Red object correctly placed on green surface")
         print(f"  Position offsets from center: x={validation_info['x_offset_from_center']:.3f}m, "
               f"y={validation_info['y_offset_from_center']:.3f}m")
     else:
-        print(f"✗ Replay FAILED - Red object NOT on green surface")
+        print(f"Replay FAILED - Red object NOT on green surface")
 
     # Cleanup
     if video_recorder is not None:
@@ -1263,6 +1266,9 @@ def run_episode_replay(ep_idx: int, initial_positions_path: str, actions_path: s
     p.disconnect()
 
 
+# ------------------------------------------------------------
+# Main Entry Points
+# ------------------------------------------------------------
 def main_record(gui: bool = True, episodes: int = 3, seed: Optional[int] = 42, save_every: int = 1) -> None:
     """Main entry for recording mode: run multiple episodes of pick-and-place data collection."""
     os.makedirs(DATA_ROOT, exist_ok=True)
@@ -1328,7 +1334,7 @@ def main_replay(episode_dir: str, gui: bool = True, replay_speed: float = 1.0,
 def main_cnn_control(model_path: str, gui: bool = True, episodes: int = 5, 
                     seed: Optional[int] = 42, save_video: bool = False,
                     max_steps: int = CNN_CONTROL_STEPS) -> None:
-    """Main entry for CNN control mode: use trained CNN to control robot on new object configurations."""
+    """Main entry for improved CNN control mode: use trained CNN to control robot on new object configurations."""
     if not TORCH_AVAILABLE:
         print("Error: PyTorch not available. CNN control mode requires PyTorch.")
         return
@@ -1338,7 +1344,7 @@ def main_cnn_control(model_path: str, gui: bool = True, episodes: int = 5,
         return
     
     print("\n" + "="*60)
-    print("Starting CNN Control Mode")
+    print("Starting Improved CNN Control Mode (Joint-Space)")
     print("="*60)
     print(f"Model: {model_path}")
     print(f"Episodes: {episodes}")
@@ -1381,7 +1387,7 @@ def main_cnn_control(model_path: str, gui: bool = True, episodes: int = 5,
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Franka Robot Pick-and-Place: Record, Replay, or CNN Control")
+    parser = argparse.ArgumentParser(description="Improved Franka Robot Pick-and-Place: Record, Replay, or CNN Control")
     parser.add_argument("mode", choices=["record", "replay", "control"], 
                        help="Mode: record new episodes, replay existing ones, or use CNN control")
     
@@ -1444,5 +1450,5 @@ if __name__ == "__main__":
     # Replay mode example:
     # main_replay("data/episode_0000", gui=True, replay_speed=1.0, save_video=False)
     
-    # CNN Control mode example:
-    # main_cnn_control("model_checkpoints/robot_cnn_best.pth", gui=True, episodes=3, seed=456)
+    # CNN Control mode example (with improved joint-space model):
+    # main_cnn_control("model_checkpoints/robot_cnn_joints_best.pth", gui=True, episodes=3, seed=456)
