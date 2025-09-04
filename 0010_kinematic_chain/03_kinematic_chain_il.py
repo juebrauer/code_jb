@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
 """
-Imitation Learning for Kinematic Chain Control
+Kinematic Chain Control with Collect/Train/Test Modes
 
-This script uses imitation learning to teach a CNN to control a kinematic chain.
-The system generates expert demonstrations and trains a neural network to mimic them.
+This script provides three modes:
+1. collect: Generate and save training data using expert demonstrations
+2. train: Train a CNN on collected data with validation
+3. test: Load trained CNN and use it to control the kinematic chain
 
-Features:
-- Automatic expert demonstration generation
-- Sequential single-DOF movements for simplicity
-- Image-based supervised learning
-- Configurable number of DOFs
+Usage:
+    python kinematic_chain_modes.py collect --dof 2 --samples 1000
+    python kinematic_chain_modes.py train --dof 2 --epochs 100
+    python kinematic_chain_modes.py test --dof 2 --model path/to/model.pth
 
-Usage: python kinematic_chain_il.py [number_of_dof]
-
-Author: Generated for kinematic chain imitation learning
+Author: Generated for modular kinematic chain learning
 Requirements: PySide6, torch, torchvision, numpy, opencv-python
 """
 
 import sys
+import os
 import math
 import random
 import argparse
 import numpy as np
 from typing import Tuple, List, Optional
 import time
+import json
+import pickle
+from pathlib import Path
 
 # Qt imports
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel
@@ -37,23 +40,25 @@ try:
     import torch.nn as nn
     import torch.optim as optim
     import cv2
-    from collections import deque
+    from torch.utils.data import Dataset, DataLoader, random_split
+    from sklearn.metrics import accuracy_score, confusion_matrix
+    import matplotlib.pyplot as plt
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-    print("Warning: PyTorch/OpenCV not available. Running in demo mode.")
+    print("Warning: PyTorch/OpenCV/sklearn/matplotlib not available.")
 
 
-class KinematicChainIL:
+class KinematicChain:
     """
-    Kinematic chain with imitation learning capabilities.
+    Base kinematic chain class for all modes.
     
-    Generates expert demonstrations and provides supervised learning data.
+    Handles forward kinematics, target generation, and basic control.
     """
     
     def __init__(self, num_dof=2, arm_length=80):
         """
-        Initialize the imitation learning kinematic chain.
+        Initialize the kinematic chain.
         
         Args:
             num_dof (int): Number of degrees of freedom
@@ -75,10 +80,10 @@ class KinematicChainIL:
         self.target_tolerance = 15.0
         self.angle_step = math.radians(1)  # 1 degree steps
         
-        # Demonstration tracking
-        self.demo_count = 0
-        self.current_demo_step = 0
-        self.demo_complete = False
+        # Scenario tracking
+        self.scenario_count = 0
+        self.current_step = 0
+        self.scenario_complete = False
         
         # Initialize positions and generate first target
         self.update_positions()
@@ -100,7 +105,7 @@ class KinematicChainIL:
         self.end_effector_pos = (x, y)
     
     def generate_new_scenario(self):
-        """Generate a new random scenario for demonstration."""
+        """Generate a new random scenario."""
         # Random starting configuration
         self.angles = [random.uniform(-math.pi, math.pi) for _ in range(self.num_dof)]
         self.update_positions()
@@ -108,12 +113,12 @@ class KinematicChainIL:
         # Generate reachable target
         self.target_pos = self.generate_reachable_target()
         
-        # Reset demonstration tracking
-        self.demo_count += 1
-        self.current_demo_step = 0
-        self.demo_complete = False
+        # Reset scenario tracking
+        self.scenario_count += 1
+        self.current_step = 0
+        self.scenario_complete = False
         
-        print(f"Demo {self.demo_count}: New scenario generated")
+        print(f"Scenario {self.scenario_count}: New target generated")
         print(f"  Start EE: ({self.end_effector_pos[0]:.1f}, {self.end_effector_pos[1]:.1f})")
         print(f"  Target: ({self.target_pos[0]:.1f}, {self.target_pos[1]:.1f})")
         print(f"  Initial distance: {self.get_distance_to_target():.1f}px")
@@ -121,8 +126,7 @@ class KinematicChainIL:
     def generate_reachable_target(self) -> Tuple[float, float]:
         """Generate a target that is definitely reachable."""
         if self.num_dof == 1:
-            # For 1 DOF: Target MUST be exactly on the circle with radius = arm_length
-            # This is the ONLY reachable workspace for 1 DOF
+            # For 1 DOF: Target MUST be exactly on the circle
             angle = random.uniform(0, 2 * math.pi)
             target_x = self.arm_length * math.cos(angle)
             target_y = self.arm_length * math.sin(angle)
@@ -152,24 +156,19 @@ class KinematicChainIL:
     
     def get_expert_action(self) -> int:
         """
-        Generate expert action using optimal inverse kinematics for 1 DOF.
-        
-        For 1 DOF: Calculate the shortest angular path to target.
+        Generate expert action using optimal inverse kinematics.
         
         Returns:
-            int: Best action (DOF_i * 3 + direction, where direction: 0=no_change, 1=-1°, 2=+1°)
+            int: Best action (DOF_i * 3 + direction)
+                 direction: 0=no_change, 1=-1°, 2=+1°
         """
         if self.is_target_reached():
             return 0  # DOF 0, no change
         
         if self.num_dof == 1:
-            # For 1 DOF: Use analytical solution instead of testing
+            # For 1 DOF: Use analytical solution
             target_x, target_y = self.target_pos
-            
-            # Calculate target angle
             target_angle = math.atan2(target_y, target_x)
-            
-            # Current angle (cumulative)
             current_angle = self.angles[0]
             
             # Calculate angular difference
@@ -182,7 +181,7 @@ class KinematicChainIL:
                 angle_diff += 2 * math.pi
             
             # Choose direction based on shortest path
-            if abs(angle_diff) < math.radians(0.5):  # Very close
+            if abs(angle_diff) < math.radians(0.5):
                 return 0  # No change needed
             elif angle_diff > 0:
                 return 2  # Turn right (+1°)
@@ -190,13 +189,13 @@ class KinematicChainIL:
                 return 1  # Turn left (-1°)
         
         else:
-            # For multi-DOF: Use the old testing approach
+            # For multi-DOF: Use greedy search
             best_action = 0
             best_distance = self.get_distance_to_target()
             
             # Test all possible single-DOF movements
             for dof in range(self.num_dof):
-                for direction in [1, 2]:  # Only test -1° and +1°, skip no_change
+                for direction in [1, 2]:  # Only test -1° and +1°
                     # Save current state
                     original_angle = self.angles[dof]
                     
@@ -223,32 +222,24 @@ class KinematicChainIL:
     
     def take_action(self, action: int) -> bool:
         """
-        Execute an action and return whether demo is complete.
-        
-        Action encoding: DOF_i * 3 + direction
-        - direction 0: no change
-        - direction 1: -1° 
-        - direction 2: +1°
+        Execute an action and return whether scenario is complete.
         
         Args:
-            action (int): Action to execute
+            action (int): Action to execute (DOF_i * 3 + direction)
             
         Returns:
-            bool: True if demonstration is complete
+            bool: True if scenario is complete
         """
-        # Decode action: DOF_index * 3 + direction
+        # Decode action
         joint_index = action // 3
         direction = action % 3
         
         # Apply action
         if direction == 0:
-            # No change for this DOF
-            pass
+            pass  # No change
         elif direction == 1:
-            # Decrease angle by 1 degree
             self.angles[joint_index] -= self.angle_step
         else:  # direction == 2
-            # Increase angle by 1 degree
             self.angles[joint_index] += self.angle_step
         
         # Keep angles in reasonable range
@@ -256,44 +247,44 @@ class KinematicChainIL:
             self.angles[joint_index] = ((self.angles[joint_index] + 2*math.pi) % (4*math.pi)) - 2*math.pi
         
         self.update_positions()
-        self.current_demo_step += 1
+        self.current_step += 1
         
-        # Check if demo is complete
+        # Check if scenario is complete
         if self.is_target_reached():
-            self.demo_complete = True
-            print(f"  Demo {self.demo_count} completed in {self.current_demo_step} steps!")
+            self.scenario_complete = True
+            print(f"  Scenario {self.scenario_count} completed in {self.current_step} steps!")
             return True
         
-        # Prevent infinite demonstrations
-        if self.current_demo_step > 100:
-            self.demo_complete = True
-            print(f"  Demo {self.demo_count} timed out after {self.current_demo_step} steps")
+        # Prevent infinite scenarios
+        if self.current_step > 100:
+            self.scenario_complete = True
+            print(f"  Scenario {self.scenario_count} timed out after {self.current_step} steps")
             return True
         
         return False
     
     def get_action_space_size(self) -> int:
-        """Get total number of possible actions: 3 actions per DOF."""
+        """Get total number of possible actions."""
         return 3 * self.num_dof
 
 
-class ImitationCNN(nn.Module):
+class ActionCNN(nn.Module):
     """
-    Convolutional Neural Network for imitation learning.
+    Convolutional Neural Network for action prediction.
     
     Maps images to action probabilities.
     """
     
     def __init__(self, action_space_size: int):
         """
-        Initialize the imitation learning CNN.
+        Initialize the CNN.
         
         Args:
             action_space_size (int): Number of possible actions
         """
-        super(ImitationCNN, self).__init__()
+        super(ActionCNN, self).__init__()
         
-        # Convolutional layers for image processing
+        # Convolutional layers
         self.conv1 = nn.Conv2d(3, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
@@ -301,10 +292,10 @@ class ImitationCNN(nn.Module):
         # Calculate feature size dynamically
         self.fc_input_size = None
         
-        # Fully connected layers - compact for efficiency
+        # Fully connected layers
         self.fc1 = None  # Initialized dynamically
         self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, action_space_size)  # Output layer
+        self.fc3 = nn.Linear(64, action_space_size)
         
         # Activation and dropout
         self.relu = nn.ReLU()
@@ -315,14 +306,9 @@ class ImitationCNN(nn.Module):
         dummy_input = torch.zeros(1, *input_shape).to(device)
         with torch.no_grad():
             x = self.relu(self.conv1(dummy_input))
-            print(f"After conv1: {x.shape}")
             x = self.relu(self.conv2(x))
-            print(f"After conv2: {x.shape}")
             x = self.relu(self.conv3(x))
-            print(f"After conv3: {x.shape}")
-            flattened_size = x.view(1, -1).size(1)
-            print(f"Flattened for MLP: {flattened_size} features")
-            return flattened_size
+            return x.view(1, -1).size(1)
     
     def forward(self, x):
         """Forward pass through the network."""
@@ -343,228 +329,69 @@ class ImitationCNN(nn.Module):
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.relu(self.fc2(x))
-        x = self.fc3(x)  # Raw logits for cross-entropy loss
+        x = self.fc3(x)
         
         return x
 
 
-class ImitationLearner:
-    """
-    Manages the imitation learning process.
+class KinematicDataset(Dataset):
+    """Dataset for loading kinematic chain training data."""
     
-    Collects expert demonstrations and trains the CNN.
-    """
-    
-    def __init__(self, action_space_size: int):
+    def __init__(self, data_dir: str):
         """
-        Initialize the imitation learner.
+        Initialize dataset.
         
         Args:
-            action_space_size (int): Number of possible actions
+            data_dir (str): Directory containing training data
         """
-        self.action_space_size = action_space_size
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.data_dir = Path(data_dir)
         
-        # Neural network and optimizer
-        self.model = ImitationCNN(action_space_size).to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
-        self.criterion = nn.CrossEntropyLoss()
+        # Load metadata
+        metadata_path = self.data_dir / "metadata.json"
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
         
-        # Data storage
-        self.demo_images = deque(maxlen=5000)  # Store demonstration images
-        self.demo_actions = deque(maxlen=5000)  # Store corresponding actions
+        with open(metadata_path, 'r') as f:
+            self.metadata = json.load(f)
         
-        # Training parameters - MORE FREQUENT TRAINING
-        self.batch_size = 16
-        self.train_interval = 10  # Train every 10 demos instead of 50
-        
-        # Statistics tracking for learning progress
-        self.total_demos = 0
-        self.training_loss = 0.0
-        self.model_accuracy = 0.0
-        
-        # Performance tracking for visualization
-        self.loss_history = deque(maxlen=100)  # Store recent losses
-        self.accuracy_history = deque(maxlen=100)  # Store recent accuracies
-        self.student_performance = deque(maxlen=50)  # Store student demo lengths
-        
-        print(f"Imitation Learner initialized on {self.device}")
+        self.num_samples = self.metadata['total_samples']
+        print(f"Loaded dataset with {self.num_samples} samples")
     
-    def add_demonstration(self, image: np.ndarray, action: int):
-        """
-        Add a demonstration example to the dataset.
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, idx):
+        """Get a sample from the dataset."""
+        # Load image
+        image_path = self.data_dir / f"image_{idx:06d}.png"
+        image = cv2.imread(str(image_path))
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        Args:
-            image (np.ndarray): State image
-            action (int): Expert action
-        """
         # Preprocess image
-        processed_image = self.preprocess_image(image)
+        image = cv2.resize(image, (84, 84))
+        image = image.astype(np.float32) / 255.0
+        image = np.transpose(image, (2, 0, 1))  # CHW format
         
-        # Store demonstration
-        self.demo_images.append(processed_image)
-        self.demo_actions.append(action)
-        self.total_demos += 1
+        # Load action
+        action_path = self.data_dir / f"action_{idx:06d}.txt"
+        with open(action_path, 'r') as f:
+            action = int(f.read().strip())
         
-        # Train more frequently for better learning
-        if len(self.demo_images) >= self.batch_size and self.total_demos % self.train_interval == 0:
-            self.train_model()
-            
-        # Print action distribution every 200 demos (less spam)
-        if self.total_demos % 200 == 0:
-            self.print_action_distribution()
-    
-    def get_learning_metrics(self):
-        """Get current learning progress metrics."""
-        if len(self.loss_history) == 0:
-            return None
-        
-        # Recent performance (last 10 training iterations)
-        recent_loss = sum(list(self.loss_history)[-10:]) / min(10, len(self.loss_history))
-        recent_accuracy = sum(list(self.accuracy_history)[-10:]) / min(10, len(self.accuracy_history))
-        
-        # Student performance trend
-        if len(self.student_performance) >= 5:
-            recent_student_steps = sum(list(self.student_performance)[-5:]) / 5
-            early_student_steps = sum(list(self.student_performance)[:5]) / 5 if len(self.student_performance) >= 10 else recent_student_steps
-            improvement = early_student_steps - recent_student_steps
-        else:
-            recent_student_steps = 0
-            improvement = 0
-        
-        return {
-            'recent_loss': recent_loss,
-            'recent_accuracy': recent_accuracy,
-            'student_avg_steps': recent_student_steps,
-            'student_improvement': improvement,
-            'total_training_steps': len(self.loss_history)
-        }
-    
-    def preprocess_image(self, image: np.ndarray) -> torch.Tensor:
-        """
-        Preprocess image for neural network input.
-        
-        Args:
-            image (np.ndarray): Raw image array (H, W, C)
-            
-        Returns:
-            torch.Tensor: Preprocessed tensor
-        """
-        # Resize to 84x84 (standard RL/IL image size)
-        image_resized = cv2.resize(image, (84, 84), interpolation=cv2.INTER_AREA)
-        
-        # Normalize and convert to CHW format
-        image_normalized = image_resized.astype(np.float32) / 255.0
-        image_chw = np.transpose(image_normalized, (2, 0, 1))
-        
-        # Convert to tensor
-        return torch.FloatTensor(image_chw)
-    
-    def train_model(self):
-        """Train the model on collected demonstrations."""
-        if len(self.demo_images) < self.batch_size:
-            return
-        
-        # Sample batch
-        batch_size = min(self.batch_size, len(self.demo_images))
-        indices = random.sample(range(len(self.demo_images)), batch_size)
-        
-        batch_images = torch.stack([self.demo_images[i] for i in indices]).to(self.device)
-        batch_actions = torch.LongTensor([self.demo_actions[i] for i in indices]).to(self.device)
-        
-        # Forward pass
-        predictions = self.model(batch_images)
-        loss = self.criterion(predictions, batch_actions)
-        
-        # Backward pass
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        
-        # Calculate accuracy
-        with torch.no_grad():
-            predicted_actions = predictions.argmax(dim=1)
-            accuracy = (predicted_actions == batch_actions).float().mean()
-            self.model_accuracy = accuracy.item()
-            self.training_loss = loss.item()
-            
-            # Store for visualization
-            self.loss_history.append(self.training_loss)
-            self.accuracy_history.append(self.model_accuracy)
-        
-        # Only print every 10th training iteration to reduce spam
-        if len(self.loss_history) % 10 == 0:
-            print(f"TRAINING UPDATE: Loss={self.training_loss:.3f}, Accuracy={self.model_accuracy:.3f}, Total Demos={self.total_demos}")
-    
-    def record_student_performance(self, steps_taken: int):
-        """Record how many steps the student needed to complete a demo."""
-        self.student_performance.append(steps_taken)
-        print(f"STUDENT PERFORMANCE: Completed in {steps_taken} steps")
-    
-    def print_action_distribution(self):
-        """Print action distribution for debugging."""
-        if len(self.demo_actions) >= 100:
-            # Only look at recent actions, not the entire history
-            recent_count = min(100, len(self.demo_actions))
-            recent_actions = list(self.demo_actions)[-recent_count:]
-            action_counts = {}
-            for a in recent_actions:
-                action_counts[a] = action_counts.get(a, 0) + 1
-            
-            print(f"ACTION DISTRIBUTION (last {recent_count} demos): {action_counts}")
-            
-            # Interpret for 1 DOF case
-            if len(action_counts) <= 3:
-                no_action = action_counts.get(0, 0)
-                left_action = action_counts.get(1, 0)  
-                right_action = action_counts.get(2, 0)
-                print(f"  No-action: {no_action}, Left(-1°): {left_action}, Right(+1°): {right_action}")
-                
-                total_moves = left_action + right_action
-                if total_moves > 0:
-                    left_ratio = left_action / total_moves
-                    right_ratio = right_action / total_moves
-                    
-                    if no_action > recent_count * 0.5:
-                        print("  WARNING: Too many no-action choices - expert might be stuck!")
-                    elif left_ratio > 0.8 or right_ratio > 0.8:
-                        print(f"  WARNING: Expert heavily biased to one direction! Left:{left_ratio:.1%}, Right:{right_ratio:.1%}")
-                    else:
-                        print(f"  GOOD: Balanced directions - Left:{left_ratio:.1%}, Right:{right_ratio:.1%}")
-                else:
-                    print("  ERROR: Expert never moves - this should not happen!")
-    
-    def predict_action(self, image: np.ndarray) -> int:
-        """
-        Predict action using trained model.
-        
-        Args:
-            image (np.ndarray): Current state image
-            
-        Returns:
-            int: Predicted action
-        """
-        if self.total_demos < self.batch_size:
-            return 0  # Return no-action if not trained yet
-        
-        with torch.no_grad():
-            processed_image = self.preprocess_image(image).unsqueeze(0).to(self.device)
-            predictions = self.model(processed_image)
-            return predictions.argmax().item()
+        return torch.FloatTensor(image), torch.LongTensor([action])[0]
 
 
-class KinematicWidgetIL(QWidget):
-    """Visualization widget for imitation learning."""
+class KinematicWidget(QWidget):
+    """Visualization widget for kinematic chain."""
     
-    def __init__(self, kinematic_chain):
+    def __init__(self, chain):
         """
         Initialize the visualization widget.
         
         Args:
-            kinematic_chain (KinematicChainIL): The kinematic chain
+            chain (KinematicChain): The kinematic chain
         """
         super().__init__()
-        self.chain = kinematic_chain
+        self.chain = chain
         
         # Window parameters
         self.setFixedSize(400, 400)
@@ -577,7 +404,7 @@ class KinematicWidgetIL(QWidget):
         self.angle_line_length = 12
         self.end_effector_radius = 6
         self.target_size = 10
-        
+    
     def paintEvent(self, event):
         """Draw the kinematic chain."""
         painter = QPainter(self)
@@ -694,7 +521,7 @@ class KinematicWidgetIL(QWidget):
         painter.setPen(QPen(QColor(0, 0, 0), 1))
         
         info_lines = [
-            f"Demo: {self.chain.demo_count} | Step: {self.chain.current_demo_step}",
+            f"Scenario: {self.chain.scenario_count} | Step: {self.chain.current_step}",
             f"Distance to Target: {self.chain.get_distance_to_target():.1f}px",
             f"End Effector: ({self.chain.end_effector_pos[0]:.1f}, {self.chain.end_effector_pos[1]:.1f})",
             f"Target: ({self.chain.target_pos[0]:.1f}, {self.chain.target_pos[1]:.1f})"
@@ -736,47 +563,53 @@ class KinematicWidgetIL(QWidget):
         return rgb_array
 
 
-class MainWindowIL(QMainWindow):
-    """Main window for imitation learning demonstration."""
+class MainWindow(QMainWindow):
+    """Main window for kinematic chain visualization."""
     
-    def __init__(self, num_dof=2):
+    def __init__(self, chain, mode, action_generator=None):
         """
         Initialize the main window.
         
         Args:
-            num_dof (int): Number of degrees of freedom
+            chain (KinematicChain): The kinematic chain
+            mode (str): Operating mode ('collect' or 'test')
+            action_generator (callable): Function to generate actions
         """
         super().__init__()
         
+        self.chain = chain
+        self.mode = mode
+        self.action_generator = action_generator
+        
         # Configure window
-        self.setWindowTitle(f"Kinematic Chain Imitation Learning - {num_dof} DOF")
-        self.setFixedSize(420, 600)
-        
-        # Create system components
-        self.chain = KinematicChainIL(num_dof)
-        
-        if TORCH_AVAILABLE:
-            self.learner = ImitationLearner(self.chain.get_action_space_size())
-            self.learning_enabled = True
-        else:
-            self.learner = None
-            self.learning_enabled = False
+        self.setWindowTitle(f"Kinematic Chain - {mode.upper()} Mode - {chain.num_dof} DOF")
+        self.setFixedSize(420, 500)
         
         # Set up UI
         self._setup_ui()
         
-        # Demo control
-        self.demo_mode = "expert"  # "expert" or "student"
+        # Control variables
         self.steps_per_second = 0
         self.last_time = time.time()
         self.step_counter = 0
         
+        # Data collection (for collect mode)
+        if mode == 'collect':
+            self.collected_samples = 0
+            self.data_dir = None
+            self.target_samples = None  # Will be set from collect_mode
+        
         # Set up timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.step)
-        self.timer.start(20)  # 50 FPS
+        self.timer.start(50)  # 20 FPS
         
-        print(f"Imitation Learning started with {num_dof} DOF")
+        print(f"{mode.upper()} mode started with {chain.num_dof} DOF")
+    
+    def set_data_directory(self, data_dir: str):
+        """Set data directory for collect mode."""
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
     
     def _setup_ui(self):
         """Set up user interface."""
@@ -784,15 +617,15 @@ class MainWindowIL(QMainWindow):
         layout = QVBoxLayout()
         
         # Kinematic visualization
-        self.kinematic_widget = KinematicWidgetIL(self.chain)
+        self.kinematic_widget = KinematicWidget(self.chain)
         layout.addWidget(self.kinematic_widget)
         
         # Status information
         info_layout = QVBoxLayout()
         
-        self.mode_label = QLabel("Mode: Expert Demonstration")
-        self.stats_label = QLabel("Statistics: Collecting data...")
-        self.performance_label = QLabel("Performance: Starting up...")
+        self.mode_label = QLabel(f"Mode: {self.mode.upper()}")
+        self.stats_label = QLabel("Statistics: Starting...")
+        self.performance_label = QLabel("Performance: Initializing...")
         
         info_layout.addWidget(self.mode_label)
         info_layout.addWidget(self.stats_label)
@@ -804,7 +637,7 @@ class MainWindowIL(QMainWindow):
         self.setCentralWidget(central_widget)
     
     def step(self):
-        """Perform one step of the demonstration/learning process."""
+        """Perform one step of the process."""
         # Performance monitoring
         current_time = time.time()
         if current_time - self.last_time >= 1.0:
@@ -814,156 +647,429 @@ class MainWindowIL(QMainWindow):
         
         self.step_counter += 1
         
-        if not self.learning_enabled:
-            # Demo mode without learning
-            self._expert_step()
-            self.kinematic_widget.update()
-            return
-        
         # Capture current image
         current_image = self.kinematic_widget.capture_image()
         
-        if self.demo_mode == "expert":
-            # Expert demonstration phase
-            expert_action = self.chain.get_expert_action()
-            
-            # Store demonstration
-            self.learner.add_demonstration(current_image, expert_action)
-            
-            # Execute expert action
-            done = self.chain.take_action(expert_action)
-            
-            if done:
-                # Switch to student mode every 5 demos for more frequent testing
-                if self.chain.demo_count % 5 == 0 and self.learner.total_demos > 50:
-                    self.demo_mode = "student"
-                    print("Switching to student mode...")
-                else:
-                    self.chain.generate_new_scenario()
+        # Generate action using provided action generator
+        if self.action_generator:
+            action = self.action_generator(current_image)
+        else:
+            action = 0  # Default: no action
         
-        else:  # student mode
-            # Let student try
-            student_action = self.learner.predict_action(current_image)
-            done = self.chain.take_action(student_action)
+        # Save data in collect mode
+        if self.mode == 'collect' and self.data_dir:
+            self._save_sample(current_image, action)
             
-            if done:
-                # Record student performance
-                self.learner.record_student_performance(self.chain.current_demo_step)
-                # Switch back to expert mode
-                self.demo_mode = "expert"
-                self.chain.generate_new_scenario()
-                print("Switching back to expert mode...")
+            # CHECK IF WE HAVE COLLECTED ENOUGH SAMPLES
+            if self.target_samples and self.collected_samples >= self.target_samples:
+                self.timer.stop()  # Stop the timer
+                self._finalize_collection()  # Finalize and exit
+                return
+        
+        # Execute action
+        done = self.chain.take_action(action)
+        
+        if done:
+            self.chain.generate_new_scenario()
         
         # Update UI
         self._update_status()
         self.kinematic_widget.update()
     
-    def _expert_step(self):
-        """Perform expert demonstration without learning."""
-        action = self.chain.get_expert_action()
-        done = self.chain.take_action(action)
+    def _save_sample(self, image: np.ndarray, action: int):
+        """Save a training sample to disk."""
+        # Save image
+        image_path = self.data_dir / f"image_{self.collected_samples:06d}.png"
+        cv2.imwrite(str(image_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         
-        if done:
-            self.chain.generate_new_scenario()
+        # Save action
+        action_path = self.data_dir / f"action_{self.collected_samples:06d}.txt"
+        with open(action_path, 'w') as f:
+            f.write(str(action))
+        
+        self.collected_samples += 1
+    
+    def _finalize_collection(self):
+        """Finalize the collection process and save metadata."""
+        print(f"\nCollection complete! Saved exactly {self.collected_samples} samples.")
+        
+        # Save metadata
+        metadata = {
+            'dof': self.chain.num_dof,
+            'total_samples': self.collected_samples,
+            'action_space_size': self.chain.get_action_space_size(),
+            'arm_length': self.chain.arm_length,
+            'target_tolerance': self.chain.target_tolerance,
+            'collection_date': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        metadata_path = self.data_dir / "metadata.json"
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        print(f"Metadata saved to {metadata_path}")
+        
+        # Close the application
+        QApplication.instance().quit()
     
     def _update_status(self):
-        """Update status labels with clearer learning progress indicators."""
-        mode_text = f"Mode: {'Expert' if self.demo_mode == 'expert' else 'Student'} | Speed: {self.steps_per_second:.0f} steps/sec"
+        """Update status labels."""
+        mode_text = f"Mode: {self.mode.upper()} | Speed: {self.steps_per_second:.0f} steps/sec"
         self.mode_label.setText(mode_text)
         
-        if self.learning_enabled:
-            # Get learning metrics
-            metrics = self.learner.get_learning_metrics()
-            
-            if metrics and metrics['total_training_steps'] > 0:
-                # Learning progress assessment
-                accuracy = metrics['recent_accuracy']
-                if accuracy > 0.8:
-                    learning_status = "✅ EXCELLENT LEARNING"
-                elif accuracy > 0.7:
-                    learning_status = "✓ GOOD LEARNING" 
-                elif accuracy > 0.6:
-                    learning_status = "~ MODERATE LEARNING"
-                elif accuracy > 0.5:
-                    learning_status = "⚠ SLOW LEARNING"
-                else:
-                    learning_status = "❌ POOR LEARNING"
-                
-                stats_text = f"Demos: {self.learner.total_demos} | Loss: {metrics['recent_loss']:.3f} | Accuracy: {accuracy:.3f} | {learning_status}"
-                
-                # Student performance analysis
-                if metrics['student_avg_steps'] > 0:
-                    if metrics['student_improvement'] > 5:
-                        student_status = f"Student: {metrics['student_avg_steps']:.1f} steps (IMPROVED ↑{metrics['student_improvement']:.1f})"
-                    elif metrics['student_improvement'] < -5:
-                        student_status = f"Student: {metrics['student_avg_steps']:.1f} steps (WORSE ↓{abs(metrics['student_improvement']):.1f})"
-                    else:
-                        student_status = f"Student: {metrics['student_avg_steps']:.1f} steps (stable)"
-                else:
-                    student_status = "Student: Not tested yet"
-                
-                perf_text = f"{student_status} | Distance: {self.chain.get_distance_to_target():.1f}px"
-                
+        if self.mode == 'collect':
+            if self.target_samples:
+                stats_text = f"Samples collected: {self.collected_samples}/{self.target_samples} | Scenarios: {self.chain.scenario_count}"
             else:
-                stats_text = f"Demos: {self.learner.total_demos} | Collecting initial training data..."
-                perf_text = f"Distance: {self.chain.get_distance_to_target():.1f}px | Warming up neural network..."
-        else:
-            stats_text = f"Demo mode - no learning | Distance: {self.chain.get_distance_to_target():.1f}px"
-            perf_text = "Install PyTorch for imitation learning"
+                stats_text = f"Samples collected: {self.collected_samples} | Scenarios: {self.chain.scenario_count}"
+            perf_text = f"Distance: {self.chain.get_distance_to_target():.1f}px | Current step: {self.chain.current_step}"
+        else:  # test mode
+            stats_text = f"Scenarios tested: {self.chain.scenario_count} | Current step: {self.chain.current_step}"
+            perf_text = f"Distance: {self.chain.get_distance_to_target():.1f}px | AI controlling"
         
         self.stats_label.setText(stats_text)
         self.performance_label.setText(perf_text)
 
 
+def collect_mode(args):
+    """Run data collection mode."""
+    print(f"\n=== COLLECT MODE ===")
+    print(f"DOF: {args.dof}")
+    print(f"Target samples: {args.samples}")
+    print(f"Output directory: {args.output}")
+    
+    # Create output directory
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create kinematic chain
+    chain = KinematicChain(args.dof)
+    
+    # Create action generator (expert)
+    def expert_action_generator(image):
+        return chain.get_expert_action()
+    
+    # Create Qt application
+    app = QApplication(sys.argv)
+    
+    # Create and configure main window
+    window = MainWindow(chain, 'collect', expert_action_generator)
+    window.set_data_directory(args.output)
+    window.target_samples = args.samples  # SET TARGET NUMBER OF SAMPLES
+    window.show()
+    
+    return app.exec()
+
+
+def train_mode(args):
+    """Run training mode."""
+    if not TORCH_AVAILABLE:
+        print("Error: PyTorch not available. Please install torch and related packages.")
+        return 1
+    
+    print(f"\n=== TRAIN MODE ===")
+    print(f"DOF: {args.dof}")
+    print(f"Data directory: {args.data}")
+    print(f"Epochs: {args.epochs}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Learning rate: {args.lr}")
+    
+    # Load dataset
+    try:
+        dataset = KinematicDataset(args.data)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+    
+    # Check DOF consistency
+    metadata_path = Path(args.data) / "metadata.json"
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+    
+    if metadata['dof'] != args.dof:
+        print(f"Error: DOF mismatch. Data was collected with {metadata['dof']} DOF, but training with {args.dof} DOF.")
+        return 1
+    
+    action_space_size = metadata['action_space_size']
+    print(f"Action space size: {action_space_size}")
+    
+    # Split dataset into train and validation
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    
+    print(f"Training samples: {train_size}")
+    print(f"Validation samples: {val_size}")
+    
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    
+    # Create model
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Training on device: {device}")
+    
+    model = ActionCNN(action_space_size).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    
+    # Training history
+    train_losses = []
+    train_accuracies = []
+    val_losses = []
+    val_accuracies = []
+    
+    print(f"\nStarting training...")
+    
+    for epoch in range(args.epochs):
+        # Training phase
+        model.train()
+        epoch_train_loss = 0.0
+        epoch_train_correct = 0
+        epoch_train_total = 0
+        
+        for batch_idx, (images, actions) in enumerate(train_loader):
+            images, actions = images.to(device), actions.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, actions)
+            loss.backward()
+            optimizer.step()
+            
+            epoch_train_loss += loss.item()
+            _, predicted = outputs.max(1)
+            epoch_train_total += actions.size(0)
+            epoch_train_correct += predicted.eq(actions).sum().item()
+        
+        # Calculate training metrics
+        avg_train_loss = epoch_train_loss / len(train_loader)
+        train_accuracy = 100.0 * epoch_train_correct / epoch_train_total
+        
+        # Validation phase
+        model.eval()
+        epoch_val_loss = 0.0
+        epoch_val_correct = 0
+        epoch_val_total = 0
+        
+        with torch.no_grad():
+            for images, actions in val_loader:
+                images, actions = images.to(device), actions.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, actions)
+                
+                epoch_val_loss += loss.item()
+                _, predicted = outputs.max(1)
+                epoch_val_total += actions.size(0)
+                epoch_val_correct += predicted.eq(actions).sum().item()
+        
+        # Calculate validation metrics
+        avg_val_loss = epoch_val_loss / len(val_loader)
+        val_accuracy = 100.0 * epoch_val_correct / epoch_val_total
+        
+        # Store history
+        train_losses.append(avg_train_loss)
+        train_accuracies.append(train_accuracy)
+        val_losses.append(avg_val_loss)
+        val_accuracies.append(val_accuracy)
+        
+        # Print progress
+        if epoch % 10 == 0 or epoch == args.epochs - 1:
+            print(f"Epoch [{epoch+1}/{args.epochs}]")
+            print(f"  Train - Loss: {avg_train_loss:.4f}, Accuracy: {train_accuracy:.2f}%")
+            print(f"  Val   - Loss: {avg_val_loss:.4f}, Accuracy: {val_accuracy:.2f}%")
+    
+    # Save model
+    model_path = Path(args.output) / f"model_dof{args.dof}_epoch{args.epochs}.pth"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'action_space_size': action_space_size,
+        'dof': args.dof,
+        'training_metadata': metadata,
+        'training_history': {
+            'train_losses': train_losses,
+            'train_accuracies': train_accuracies,
+            'val_losses': val_losses,
+            'val_accuracies': val_accuracies
+        }
+    }, model_path)
+    
+    print(f"\nModel saved to: {model_path}")
+    
+    # Plot training history
+    plt.figure(figsize=(12, 4))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accuracies, label='Train Accuracy')
+    plt.plot(val_accuracies, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.title('Training and Validation Accuracy')
+    plt.legend()
+    plt.grid(True)
+    
+    plot_path = Path(args.output) / f"training_history_dof{args.dof}.png"
+    plt.tight_layout()
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    print(f"Training plot saved to: {plot_path}")
+    
+    # Final results
+    print(f"\n=== TRAINING COMPLETE ===")
+    print(f"Final Train Accuracy: {train_accuracies[-1]:.2f}%")
+    print(f"Final Val Accuracy: {val_accuracies[-1]:.2f}%")
+    print(f"Best Val Accuracy: {max(val_accuracies):.2f}%")
+    
+    return 0
+
+
+def test_mode(args):
+    """Run test mode."""
+    if not TORCH_AVAILABLE:
+        print("Error: PyTorch not available. Please install torch and related packages.")
+        return 1
+    
+    print(f"\n=== TEST MODE ===")
+    print(f"DOF: {args.dof}")
+    print(f"Model: {args.model}")
+    
+    # Load model
+    try:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        checkpoint = torch.load(args.model, map_location=device)
+        
+        # Check DOF consistency
+        if checkpoint['dof'] != args.dof:
+            print(f"Error: DOF mismatch. Model was trained with {checkpoint['dof']} DOF, but testing with {args.dof} DOF.")
+            return 1
+        
+        # Create and load model
+        model = ActionCNN(checkpoint['action_space_size']).to(device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
+        
+        print(f"Model loaded successfully!")
+        print(f"Action space size: {checkpoint['action_space_size']}")
+        print(f"Training metadata: {checkpoint['training_metadata']['collection_date']}")
+        
+    except FileNotFoundError:
+        print(f"Error: Model file not found: {args.model}")
+        return 1
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        return 1
+    
+    # Create kinematic chain
+    chain = KinematicChain(args.dof)
+    
+    # Create neural network action generator
+    def nn_action_generator(image):
+        # Preprocess image
+        image_resized = cv2.resize(image, (84, 84))
+        image_normalized = image_resized.astype(np.float32) / 255.0
+        image_chw = np.transpose(image_normalized, (2, 0, 1))
+        image_tensor = torch.FloatTensor(image_chw).unsqueeze(0).to(device)
+        
+        # Predict action
+        with torch.no_grad():
+            outputs = model(image_tensor)
+            predicted_action = outputs.argmax().item()
+        
+        return predicted_action
+    
+    # Create Qt application
+    app = QApplication(sys.argv)
+    
+    # Create main window
+    window = MainWindow(chain, 'test', nn_action_generator)
+    window.show()
+    
+    print(f"Test mode running. Neural network is controlling the arm.")
+    return app.exec()
+
+
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Imitation Learning for Kinematic Chain Control",
-        epilog="Example: python kinematic_chain_il.py 2"
+        description="Kinematic Chain Control with Collect/Train/Test Modes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Collect 1000 training samples with 2 DOF
+  python kinematic_chain_modes.py collect --dof 2 --samples 1000 --output data/dof2_1k
+
+  # Train model on collected data
+  python kinematic_chain_modes.py train --dof 2 --data data/dof2_1k --epochs 100 --output models/
+
+  # Test trained model
+  python kinematic_chain_modes.py test --dof 2 --model models/model_dof2_epoch100.pth
+        """
     )
-    parser.add_argument(
-        "num_dof", 
-        nargs="?", 
-        type=int, 
-        default=2,
-        help="Number of degrees of freedom. Default: 2"
-    )
-    return parser.parse_args()
+    
+    subparsers = parser.add_subparsers(dest='mode', help='Operating mode')
+    
+    # Collect mode
+    collect_parser = subparsers.add_parser('collect', help='Collect training data')
+    collect_parser.add_argument('--dof', type=int, default=2, help='Number of degrees of freedom (default: 2)')
+    collect_parser.add_argument('--samples', type=int, default=1000, help='Number of samples to collect (default: 1000)')
+    collect_parser.add_argument('--output', type=str, default='data/training_data', help='Output directory (default: data/training_data)')
+    
+    # Train mode
+    train_parser = subparsers.add_parser('train', help='Train neural network')
+    train_parser.add_argument('--dof', type=int, default=2, help='Number of degrees of freedom (default: 2)')
+    train_parser.add_argument('--data', type=str, required=True, help='Training data directory')
+    train_parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs (default: 100)')
+    train_parser.add_argument('--batch-size', type=int, default=32, help='Batch size (default: 32)')
+    train_parser.add_argument('--lr', type=float, default=0.001, help='Learning rate (default: 0.001)')
+    train_parser.add_argument('--output', type=str, default='models/', help='Output directory for saved model (default: models/)')
+    
+    # Test mode
+    test_parser = subparsers.add_parser('test', help='Test trained model')
+    test_parser.add_argument('--dof', type=int, default=2, help='Number of degrees of freedom (default: 2)')
+    test_parser.add_argument('--model', type=str, required=True, help='Path to trained model file')
+    
+    args = parser.parse_args()
+    
+    if args.mode is None:
+        parser.print_help()
+        sys.exit(1)
+    
+    return args
 
 
 def main():
     """Main application entry point."""
     args = parse_arguments()
     
-    if args.num_dof < 1:
+    if args.dof < 1:
         print("Error: Number of DOF must be at least 1.")
         return 1
     
-    # Create Qt application
-    app = QApplication(sys.argv)
-    
-    # Create and show main window
-    window = MainWindowIL(args.num_dof)
-    window.show()
-    
     # Print startup information
-    print(f"\nKinematic Chain Imitation Learning")
-    print(f"  • Degrees of Freedom: {args.num_dof}")
-    print(f"  • Action Space Size: {3 * args.num_dof}")
-    print(f"  • PyTorch Available: {TORCH_AVAILABLE}")
-    print(f"  • Learning: {'Enabled' if TORCH_AVAILABLE else 'Demo Only'}")
-    print(f"\nExpert Strategy:")
-    print(f"  • Tests all single-DOF movements")
-    print(f"  • Picks action that reduces distance most")
-    print(f"  • Moves only one joint at a time")
-    print(f"\nProcess:")
-    print(f"  • Expert demonstrates → Student learns → Test student → Repeat")
-    print(f"  • Switches to student mode every 10 demos")
+    print(f"\nKinematic Chain Control - {args.mode.upper()} Mode")
+    print(f"Degrees of Freedom: {args.dof}")
+    print(f"PyTorch Available: {TORCH_AVAILABLE}")
     
-    if not TORCH_AVAILABLE:
-        print(f"\nInstall dependencies: pip install torch opencv-python")
-    
-    return app.exec()
+    # Run appropriate mode
+    if args.mode == 'collect':
+        return collect_mode(args)
+    elif args.mode == 'train':
+        return train_mode(args)
+    elif args.mode == 'test':
+        return test_mode(args)
+    else:
+        print(f"Error: Unknown mode '{args.mode}'")
+        return 1
 
 
 if __name__ == "__main__":
