@@ -12,4 +12,4 @@
 
 # Playlists
 
-- [My video playlist for deep work atmossphehre](https://www.youtube.com/playlist?list=PLTaTphflE5beJGUa2Cec4-GXWGQb-yeAQ)
+- [My video playlist for deep work atmossphere](https://www.youtube.com/playlist?list=PLTaTphflE5beJGUa2Cec4-GXWGQb-yeAQ)
