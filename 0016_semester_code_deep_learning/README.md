@@ -1,1 +1,1 @@
-This folder contains code that you have seen in video lectures and video quizzes.
+This folder contains code that you have seen in lectures and video quizzes.
