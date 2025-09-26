@@ -4,6 +4,12 @@
 - [Germany Used Cars Dataset 2023](https://www.kaggle.com/datasets/wspirat/germany-used-cars-dataset-2023)
 
 
+# Demos for Deep Learning
+
+- [Conv Op Demo](https://deeplizard.com/resource/pavq7noze2)
+- [Max-Pool Op Demo](https://deeplizard.com/resource/pavq7noze3)
+  
+
 # Videos
 
 - [Fine-Tune GPT-OSS-20B on Your Own Dataset Locally: Step-by-Step Tutorial](https://www.youtube.com/watch?v=LRvXsQhOlD0)
