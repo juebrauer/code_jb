@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
 """
-Deep Reinforcement Learning for Kinematic Chain Control
+Kinematic Chain Control with Imitation Learning
 
-This script combines a kinematic chain simulation with Deep RL to learn
-inverse kinematics. The agent learns to reach target positions using only
-visual input (rendered images) and discrete angle adjustments.
+This script implements three modes for learning kinematic control:
+1. collect: Collect training data (image, action) pairs using demonstrator
+2. train: Train CNN to map images to actions using collected data  
+3. test: Use trained CNN to control the robotic arm
 
-Features:
-- Image-based RL environment (agent sees only the rendered scene)
-- Discrete action space: +1° or -1° for each DOF
-- Random target generation within reachable workspace
-- Episode-based training with automatic reset on target reach
-- Configurable number of DOFs (starting with 1 DOF for simplicity)
+Modes:
+- collect: Human demonstrator generates actions, data saved to filesystem
+- train: CNN training with train/validation split for generalization testing
+- test: Load trained CNN and use for arm control
 
-Usage: python kinematic_chain_rl.py [number_of_dof]
+Usage: 
+  python script.py collect --num_dof 1 --data_dir ./training_data
+  python script.py train --data_dir ./training_data --model_path ./model.pth
+  python script.py test --model_path ./model.pth --num_dof 1
 
-Author: Generated for kinematic chain RL visualization  
-Requirements: PySide6, torch, torchvision, numpy
+Author: Generated for kinematic chain imitation learning
+Requirements: PySide6, torch, torchvision, numpy, opencv-python
 """
 
 import sys
+import os
 import math
 import random
 import argparse
 import numpy as np
-from typing import Tuple, List, Optional
+import pickle
+import json
+from typing import Tuple, List, Optional, Dict
+from pathlib import Path
+import time
 
 # Qt imports
 from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel
@@ -38,58 +45,60 @@ try:
     import torch.nn as nn
     import torch.optim as optim
     import torchvision.transforms as transforms
-    from collections import deque
+    from torch.utils.data import Dataset, DataLoader, random_split
+    import cv2
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-    print("Warning: PyTorch not available. Running in demo mode without RL training.")
+    print("Warning: PyTorch not available. Some modes will not work.")
+
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    print("Warning: OpenCV not available. Image processing may be limited.")
 
 
-class KinematicChainRL:
+class KinematicChain:
     """
-    Enhanced kinematic chain with reinforcement learning capabilities.
+    Basic kinematic chain simulation.
     
-    This class extends the basic kinematic chain to include RL-specific
-    functionality like reward calculation, episode management, and
-    action space definition.
+    Provides core functionality for forward kinematics, action execution,
+    and state management. Shared between collect and test modes.
     """
     
     def __init__(self, num_dof=1, arm_length=80):
         """
-        Initialize the RL-enabled kinematic chain.
+        Initialize the kinematic chain.
         
         Args:
-            num_dof (int): Number of degrees of freedom (default: 1 for initial experiments)
-            arm_length (float): Length of each arm segment in pixels (default: 80)
+            num_dof (int): Number of degrees of freedom
+            arm_length (float): Length of each arm segment in pixels
         """
         self.num_dof = num_dof
         self.arm_length = arm_length
-        self.max_reach = num_dof * arm_length  # Maximum reachable distance
+        self.max_reach = num_dof * arm_length
         
-        # Initialize joint angles (start at zero for consistent training)
+        # Initialize joint angles
         self.angles = [0.0 for _ in range(num_dof)]
         
         # Position tracking
         self.joint_positions = [(0, 0)]
         self.end_effector_pos = (0, 0)
         
-        # RL-specific parameters
+        # Current target
         self.target_pos = (0, 0)
-        self.target_tolerance = 15.0  # Pixels - target is reached within this radius
+        self.target_tolerance = 15.0  # Pixels
         self.angle_step = math.radians(1)  # 1 degree steps
         
         # Episode tracking
         self.episode_count = 0
         self.step_count = 0
-        self.max_steps_per_episode = 500  # Prevent infinite episodes
         
-        # Performance metrics
-        self.success_count = 0
-        self.total_episodes = 0
-        
-        # Initialize positions and target
+        # Initialize positions and generate first target
         self.update_positions()
-        self.reset_episode()
+        self.generate_new_target()
     
     def update_positions(self):
         """Calculate all joint positions using forward kinematics."""
@@ -106,51 +115,36 @@ class KinematicChainRL:
         
         self.end_effector_pos = (x, y)
     
-    def generate_random_target(self) -> Tuple[float, float]:
+    def generate_new_target(self):
         """
-        Generate a random target position within the DEFINITELY reachable workspace.
-        
-        For 1 DOF: Target must be on a circle with radius = arm_length
-        For multiple DOFs: More complex workspace, but we ensure reachability
-        
-        Returns:
-            Tuple[float, float]: Target position (x, y)
+        Generate a new random target position within reachable workspace.
         """
         if self.num_dof == 1:
-            # For 1 DOF: Target MUST be exactly on the circle with radius = arm_length
-            # This ensures the target is always reachable
+            # For 1 DOF: Target on the circle with radius = arm_length
             angle = random.uniform(0, 2 * math.pi)
             target_x = self.arm_length * math.cos(angle)
             target_y = self.arm_length * math.sin(angle)
-            return (target_x, target_y)
+            self.target_pos = (target_x, target_y)
         else:
-            # For multiple DOFs: Use conservative estimate within workspace
-            max_distance = 0.8 * self.max_reach  # More conservative
-            min_distance = 0.2 * self.max_reach  # Avoid too close to origin
-            
-            distance = random.uniform(min_distance, max_distance)
+            # For multi-DOF: Random position within 80% of max reach
+            distance = random.uniform(0.2 * self.max_reach, 0.8 * self.max_reach)
             angle = random.uniform(0, 2 * math.pi)
-            
             target_x = distance * math.cos(angle)
             target_y = distance * math.sin(angle)
-            return (target_x, target_y)
+            self.target_pos = (target_x, target_y)
     
     def reset_episode(self):
-        """Reset the environment for a new episode."""
+        """Reset for a new episode."""
         # Reset joint angles to random starting positions
         self.angles = [random.uniform(-math.pi, math.pi) for _ in range(self.num_dof)]
         
-        # Generate new target
-        self.target_pos = self.generate_random_target()
+        # Update positions and generate new target
+        self.update_positions()
+        self.generate_new_target()
         
         # Reset counters
         self.step_count = 0
         self.episode_count += 1
-        
-        # Update positions
-        self.update_positions()
-        
-        print(f"Episode {self.episode_count}: New target at ({self.target_pos[0]:.1f}, {self.target_pos[1]:.1f})")
     
     def get_distance_to_target(self) -> float:
         """
@@ -172,164 +166,139 @@ class KinematicChainRL:
         """
         return self.get_distance_to_target() <= self.target_tolerance
     
-    def get_reward(self) -> float:
-        """
-        Calculate reward for the current state.
-        
-        Reward structure:
-        - Large positive reward for reaching target
-        - Negative reward proportional to distance (encourages getting closer)
-        - Small penalty per step (encourages efficiency)
-        - Large penalty for exceeding max steps
-        
-        Returns:
-            float: Reward value
-        """
-        distance = self.get_distance_to_target()
-        
-        if self.is_target_reached():
-            return 100.0  # Large positive reward for success
-        
-        # Distance-based reward (negative, closer to target is better)
-        distance_reward = -distance / 10.0
-        
-        # Step penalty (encourages efficiency)
-        step_penalty = -0.1
-        
-        # Timeout penalty
-        if self.step_count >= self.max_steps_per_episode:
-            return -50.0  # Large negative reward for timeout
-        
-        return distance_reward + step_penalty
     
-    def take_action(self, action: int) -> Tuple[float, bool]:
+    def take_action(self, action: int):
         """
-        Execute an action and return reward and episode termination status.
+        Execute an action by adjusting joint angles.
         
-        Action space:
-        - For 1 DOF: 0 = -1°, 1 = +1°
-        - For n DOFs: 2*i = DOF i -1°, 2*i+1 = DOF i +1°
+        Action space: For each DOF i, actions are 2*i and 2*i+1
+        - 2*i: Decrease angle by 1 degree
+        - 2*i+1: Increase angle by 1 degree
         
         Args:
-            action (int): Action index
-            
-        Returns:
-            Tuple[float, bool]: (reward, episode_done)
+            action (int): Action index (0 to 2*num_dof-1)
         """
         if action < 0 or action >= 2 * self.num_dof:
             raise ValueError(f"Invalid action {action} for {self.num_dof} DOFs")
         
         # Decode action
         joint_index = action // 2
-        direction = 1 if action % 2 == 1 else -1
+        action_type = action % 2
         
         # Apply action
-        self.angles[joint_index] += direction * self.angle_step
+        if action_type == 0:
+            # Decrease angle by 1 degree
+            self.angles[joint_index] -= self.angle_step
+        else:  # action_type == 1
+            # Increase angle by 1 degree
+            self.angles[joint_index] += self.angle_step
         
-        # Keep angles in reasonable range (-2π to 2π)
+        # Keep angles in reasonable range
         self.angles[joint_index] = ((self.angles[joint_index] + 2*math.pi) % (4*math.pi)) - 2*math.pi
         
         # Update positions
         self.update_positions()
         self.step_count += 1
         
-        # Calculate reward and check termination
-        reward = self.get_reward()
-        episode_done = self.is_target_reached() or self.step_count >= self.max_steps_per_episode
+        # Check if target reached for potential reset
+        if self.is_target_reached():
+            print(f"🎯 Target reached in {self.step_count} steps!")
+            return True  # Episode done
         
-        if episode_done and self.is_target_reached():
-            self.success_count += 1
-            print(f"🎯 Target reached in {self.step_count} steps! Success rate: {self.success_count}/{self.episode_count}")
-        elif episode_done:
-            print(f"⏰ Episode timeout after {self.step_count} steps")
-        
-        return reward, episode_done
+        return False  # Episode continues
     
     def get_action_space_size(self) -> int:
-        """Get the size of the action space."""
+        """Get the size of the action space (2 actions per DOF)."""
         return 2 * self.num_dof
 
 
-class DQN(nn.Module):
+class ActionCNN(nn.Module):
     """
-    Deep Q-Network for learning kinematic control from images.
+    CNN for imitation learning: maps images to action vectors.
     
     Architecture:
     - Convolutional layers for image processing
-    - Fully connected layers for decision making
-    - Output layer with one value per action
+    - Fully connected layers for action prediction
+    - Output layer with action probabilities/logits
     """
     
     def __init__(self, action_space_size: int):
         """
-        Initialize the DQN.
+        Initialize the Action CNN.
         
         Args:
             action_space_size (int): Number of possible actions
         """
-        super(DQN, self).__init__()
+        super(ActionCNN, self).__init__()
         
         # Convolutional layers for image processing
         self.conv1 = nn.Conv2d(3, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         
+        # Batch normalization for training stability
+        self.bn1 = nn.BatchNorm2d(32)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.bn3 = nn.BatchNorm2d(64)
+        
         # We'll calculate the actual size dynamically
         self.fc_input_size = None
         
-        # Fully connected layers (will be initialized after first forward pass)
-        self.fc1 = None
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, action_space_size)
+        # Fully connected layers
+        self.fc1 = None  # Will be initialized dynamically
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, action_space_size)  # Output layer
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.2)
         
         # Activation functions
         self.relu = nn.ReLU()
     
     def _get_conv_output_size(self, input_shape, device):
         """Calculate the output size of convolutional layers."""
-        # Create a dummy input to calculate the output size on correct device
         dummy_input = torch.zeros(1, *input_shape).to(device)
         with torch.no_grad():
-            x = self.relu(self.conv1(dummy_input))
-            x = self.relu(self.conv2(x))
-            x = self.relu(self.conv3(x))
+            x = self.relu(self.bn1(self.conv1(dummy_input)))
+            x = self.relu(self.bn2(self.conv2(x)))
+            x = self.relu(self.bn3(self.conv3(x)))
             return x.view(1, -1).size(1)
     
     def forward(self, x):
         """Forward pass through the network."""
         # Initialize fc1 on first forward pass
         if self.fc1 is None:
-            device = x.device  # Get device from input tensor
+            device = x.device
             self.fc_input_size = self._get_conv_output_size(x.shape[1:], device)
-            self.fc1 = nn.Linear(self.fc_input_size, 512).to(device)
+            self.fc1 = nn.Linear(self.fc_input_size, 128).to(device)
             print(f"Initialized FC layer with input size: {self.fc_input_size}")
         
-        # Convolutional layers with ReLU activation
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.relu(self.conv3(x))
+        # Convolutional layers with batch norm and ReLU
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.relu(self.bn2(self.conv2(x)))
+        x = self.relu(self.bn3(self.conv3(x)))
         
         # Flatten for fully connected layers
         x = x.view(x.size(0), -1)
         
-        # Fully connected layers
+        # Fully connected layers with dropout
         x = self.relu(self.fc1(x))
+        x = self.dropout(x)
         x = self.relu(self.fc2(x))
+        x = self.dropout(x)
         x = self.fc3(x)
         
         return x
 
 
-class RLAgent:
+class ImitationAgent:
     """
-    Deep Q-Learning agent for kinematic control.
-    
-    Implements DQN with experience replay and target network.
+    Agent for imitation learning using supervised learning on collected data.
     """
     
     def __init__(self, action_space_size: int, learning_rate: float = 1e-4):
         """
-        Initialize the RL agent.
+        Initialize the imitation learning agent.
         
         Args:
             action_space_size (int): Number of possible actions
@@ -338,33 +307,15 @@ class RLAgent:
         self.action_space_size = action_space_size
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Neural networks
-        self.q_network = DQN(action_space_size).to(self.device)
-        self.target_network = DQN(action_space_size).to(self.device)
-        self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
+        # Neural network
+        self.network = ActionCNN(action_space_size).to(self.device)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
         
-        # Experience replay - REDUCED buffer size for memory efficiency
-        self.memory = deque(maxlen=2000)  # Reduced from 10000
-        self.batch_size = 8  # Reduced from 32 for memory efficiency
-        
-        # RL parameters
-        self.epsilon = 1.0  # Exploration rate
-        self.epsilon_decay = 0.995
-        self.epsilon_min = 0.01
-        self.gamma = 0.99  # Discount factor
-        self.target_update_frequency = 100  # Steps between target network updates
-        
-        # Training tracking
-        self.step_count = 0
-        
-        # Update target network initially
-        self.update_target_network()
-        
-        print(f"RL Agent initialized on {self.device}")
+        print(f"Imitation Agent initialized on {self.device}")
     
     def preprocess_image(self, image: np.ndarray) -> torch.Tensor:
         """
-        Preprocess image for neural network input with memory optimization.
+        Preprocess image for neural network input.
         
         Args:
             image (np.ndarray): Raw image array (H, W, C)
@@ -372,10 +323,16 @@ class RLAgent:
         Returns:
             torch.Tensor: Preprocessed tensor ready for network
         """
-        # Resize image to reduce memory footprint while preserving aspect ratio
-        # For 400x400 -> 84x84 (common RL image size)
-        import cv2
-        image_resized = cv2.resize(image, (84, 84), interpolation=cv2.INTER_AREA)
+        if CV2_AVAILABLE:
+            # Resize image to 84x84
+            image_resized = cv2.resize(image, (84, 84), interpolation=cv2.INTER_AREA)
+        else:
+            # Fallback: simple downsample
+            h, w = image.shape[:2]
+            step_h, step_w = h // 84, w // 84
+            image_resized = image[::step_h, ::step_w]
+            if image_resized.shape[0] != 84 or image_resized.shape[1] != 84:
+                image_resized = np.resize(image_resized, (84, 84, 3))
         
         # Convert to float and normalize to [0, 1]
         image_resized = image_resized.astype(np.float32) / 255.0
@@ -390,7 +347,7 @@ class RLAgent:
     
     def select_action(self, state: torch.Tensor) -> int:
         """
-        Select action using epsilon-greedy policy.
+        Select action using the trained network.
         
         Args:
             state (torch.Tensor): Current state (preprocessed image)
@@ -398,96 +355,48 @@ class RLAgent:
         Returns:
             int: Selected action
         """
-        if random.random() < self.epsilon:
-            # Exploration: random action
-            return random.randint(0, self.action_space_size - 1)
-        else:
-            # Exploitation: best action according to Q-network
-            with torch.no_grad():
-                q_values = self.q_network(state)
-                return q_values.argmax().item()
+        self.network.eval()
+        with torch.no_grad():
+            action_logits = self.network(state)
+            return action_logits.argmax().item()
     
-    def store_experience(self, state, action, reward, next_state, done):
-        """Store experience in replay buffer."""
-        self.memory.append((state, action, reward, next_state, done))
+    def save_model(self, filepath: str):
+        """Save the trained model to disk."""
+        torch.save({
+            'network_state_dict': self.network.state_dict(),
+            'action_space_size': self.action_space_size
+        }, filepath)
+        print(f"Model saved to {filepath}")
     
-    def train(self):
-        """Train the Q-network on a batch of experiences."""
-        if len(self.memory) < self.batch_size:
-            return
-        
-        # Sample random batch
-        batch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
-        
-        try:
-            # Convert to tensors with gradient checkpointing for memory efficiency
-            states = torch.cat(states)
-            actions = torch.LongTensor(actions).to(self.device)
-            rewards = torch.FloatTensor(rewards).to(self.device)
-            next_states = torch.cat(next_states)
-            dones = torch.BoolTensor(dones).to(self.device)
-            
-            # Current Q values
-            current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1))
-            
-            # Next Q values from target network
-            with torch.no_grad():
-                next_q_values = self.target_network(next_states).max(1)[0]
-                target_q_values = rewards + (self.gamma * next_q_values * ~dones)
-            
-            # Compute loss and optimize
-            loss = nn.MSELoss()(current_q_values.squeeze(), target_q_values)
-            
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            
-            # Clear intermediate tensors to free GPU memory
-            del states, next_states, current_q_values, next_q_values, target_q_values
-            torch.cuda.empty_cache()  # Force GPU memory cleanup
-            
-        except torch.cuda.OutOfMemoryError:
-            print("⚠️  GPU OOM during training - clearing cache and skipping batch")
-            torch.cuda.empty_cache()
-            return
-        
-        # Update epsilon
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-        
-        # Update target network periodically
-        self.step_count += 1
-        if self.step_count % self.target_update_frequency == 0:
-            self.update_target_network()
-    
-    def update_target_network(self):
-        """Copy weights from main network to target network."""
-        self.target_network.load_state_dict(self.q_network.state_dict())
+    def load_model(self, filepath: str):
+        """Load a trained model from disk."""
+        checkpoint = torch.load(filepath, map_location=self.device)
+        self.network.load_state_dict(checkpoint['network_state_dict'])
+        print(f"Model loaded from {filepath}")
 
 
-class KinematicWidgetRL(QWidget):
+class KinematicWidget(QWidget):
     """
-    Enhanced visualization widget with RL-specific features.
+    Visualization widget for kinematic chain.
     
-    Adds target visualization and image capture for RL training.
+    Provides rendering and image capture functionality.
     """
     
     def __init__(self, kinematic_chain):
         """
-        Initialize the RL visualization widget.
+        Initialize the visualization widget.
         
         Args:
-            kinematic_chain (KinematicChainRL): The RL-enabled kinematic chain
+            kinematic_chain (KinematicChain): The kinematic chain instance
         """
         super().__init__()
         self.chain = kinematic_chain
         
-        # Set fixed window size - REDUCED for memory efficiency
-        self.setFixedSize(400, 400)  # Reduced from 800x800
+        # Set fixed window size
+        self.setFixedSize(400, 400)
         
         # Calculate center coordinates
-        self.center_x = 200  # Updated for new size
+        self.center_x = 200
         self.center_y = 200
         
         # Visual parameters
@@ -664,54 +573,108 @@ class KinematicWidgetRL(QWidget):
         return rgb_array
 
 
-class MainWindowRL(QMainWindow):
+class DataCollectionDataset(Dataset):
     """
-    Main window for RL-enabled kinematic chain simulation.
-    
-    Manages the RL training loop and visualization updates.
+    Dataset class for loading collected training data.
     """
     
-    def __init__(self, num_dof=1):
+    def __init__(self, data_dir: str):
         """
-        Initialize the RL main window.
+        Initialize dataset from collected data directory.
         
         Args:
+            data_dir (str): Directory containing collected data
+        """
+        self.data_dir = Path(data_dir)
+        self.data_files = list(self.data_dir.glob("*.pkl"))
+        
+        if not self.data_files:
+            raise ValueError(f"No data files found in {data_dir}")
+        
+        print(f"Found {len(self.data_files)} data files")
+    
+    def __len__(self):
+        return len(self.data_files)
+    
+    def __getitem__(self, idx):
+        # Load data sample
+        with open(self.data_files[idx], 'rb') as f:
+            sample = pickle.load(f)
+        
+        image = sample['image']
+        action = sample['action']
+        
+        # Preprocess image
+        if CV2_AVAILABLE:
+            image = cv2.resize(image, (84, 84), interpolation=cv2.INTER_AREA)
+        else:
+            h, w = image.shape[:2]
+            step_h, step_w = h // 84, w // 84
+            image = image[::step_h, ::step_w]
+            if image.shape[0] != 84 or image.shape[1] != 84:
+                image = np.resize(image, (84, 84, 3))
+        
+        # Normalize and convert to CHW format
+        image = image.astype(np.float32) / 255.0
+        image = np.transpose(image, (2, 0, 1))
+        
+        return torch.FloatTensor(image), torch.LongTensor([action])
+
+
+class MainWindow(QMainWindow):
+    """
+    Main window for kinematic chain simulation.
+    
+    Supports collect and test modes.
+    """
+    
+    def __init__(self, mode: str, num_dof=1, **kwargs):
+        """
+        Initialize the main window.
+        
+        Args:
+            mode (str): Operation mode ('collect' or 'test')
             num_dof (int): Number of degrees of freedom
+            **kwargs: Additional mode-specific arguments
         """
         super().__init__()
         
-        # Configure window - REDUCED size for memory efficiency
-        self.setWindowTitle(f"Kinematic Chain Deep RL - {num_dof} DOF")
-        self.setFixedSize(420, 550)  # Smaller window for 400x400 widget
+        self.mode = mode
+        self.num_dof = num_dof
         
-        # Create kinematic chain and agent
-        self.chain = KinematicChainRL(num_dof)
+        # Configure window
+        self.setWindowTitle(f"Kinematic Chain - {mode.title()} Mode - {num_dof} DOF")
+        self.setFixedSize(420, 550)
         
-        if TORCH_AVAILABLE:
-            self.agent = RLAgent(self.chain.get_action_space_size())
-            self.training_enabled = True
-        else:
-            self.agent = None
-            self.training_enabled = False
+        # Create kinematic chain
+        self.chain = KinematicChain(num_dof)
+        
+        # Mode-specific initialization
+        if mode == 'collect':
+            self.data_dir = kwargs.get('data_dir', './training_data')
+            self.data_counter = 0
+            os.makedirs(self.data_dir, exist_ok=True)
+            print(f"Data collection mode - saving to {self.data_dir}")
+        
+        elif mode == 'test':
+            model_path = kwargs.get('model_path')
+            if not model_path or not os.path.exists(model_path):
+                raise ValueError(f"Model file not found: {model_path}")
+            
+            if not TORCH_AVAILABLE:
+                raise ValueError("PyTorch not available - test mode requires PyTorch")
+            
+            self.agent = ImitationAgent(self.chain.get_action_space_size())
+            self.agent.load_model(model_path)
+            print(f"Test mode - loaded model from {model_path}")
         
         # Set up UI
         self._setup_ui()
         
-        # RL training parameters
-        self.training_speed = 1  # milliseconds between steps - MINIMAL for max speed
-        self.current_state = None
-        
-        # Performance monitoring
-        self.steps_per_second = 0
-        self.last_time = 0
-        self.step_counter = 0
-        
-        # Set up training timer
+        # Set up simulation timer
         self.timer = QTimer()
-        self.timer.timeout.connect(self.rl_step)
-        self.timer.start(self.training_speed)
-        
-        print(f"🚀 RL Training Started (Training: {self.training_enabled})")
+        self.timer.timeout.connect(self.simulation_step)
+        self.timer.start(100)  # 10 FPS
     
     def _setup_ui(self):
         """Set up the user interface."""
@@ -719,17 +682,21 @@ class MainWindowRL(QMainWindow):
         layout = QVBoxLayout()
         
         # Kinematic visualization
-        self.kinematic_widget = KinematicWidgetRL(self.chain)
+        self.kinematic_widget = KinematicWidget(self.chain)
         layout.addWidget(self.kinematic_widget)
         
-        # RL status information
+        # Status information
         info_layout = QHBoxLayout()
         
-        self.epsilon_label = QLabel("Epsilon: N/A")
-        self.training_status_label = QLabel("Training: Disabled" if not self.training_enabled else "Training: Enabled")
+        self.mode_label = QLabel(f"Mode: {self.mode.title()}")
+        self.status_label = QLabel("Status: Running")
         
-        info_layout.addWidget(self.epsilon_label)
-        info_layout.addWidget(self.training_status_label)
+        if self.mode == 'collect':
+            self.data_count_label = QLabel("Samples: 0")
+            info_layout.addWidget(self.data_count_label)
+        
+        info_layout.addWidget(self.mode_label)
+        info_layout.addWidget(self.status_label)
         
         layout.addLayout(info_layout)
         
