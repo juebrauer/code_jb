@@ -1,11 +1,9 @@
 # Datasets
-
 - [London Bike Sharing Dataset](https://www.kaggle.com/datasets/hmavrodiev/london-bike-sharing-dataset)
 - [Germany Used Cars Dataset 2023](https://www.kaggle.com/datasets/wspirat/germany-used-cars-dataset-2023)
 
 
 # Computer Vision
-
 - [xkcd Comic: Computer Vision is hard](https://xkcd.com/1425/)
 - [Chihuahua or muffin? - CV is hard](https://www.metamaven.com/chihuahua-vs-muffin-comparison-computer-vision-apis/)
 - [Chihuahua or muffin? - CV is not that hard any longer](https://www.reddit.com/r/ChatGPT/comments/1771zux/computer_vision_has_been_solved_internally/)
@@ -27,11 +25,19 @@ Instead, the Kernel trick computes the similarity of vectors in that feature spa
 - [Deep Learning Boom: Important papers now often are written in industry - word2vec](https://arxiv.org/pdf/1301.3781)
 - [Deep Learning Boom: Important papers now often are written in industry - Transformer paper](https://arxiv.org/abs/1706.03762)
 - [Deep Learning Boom: Important papers now often are written in industry - GPT2 paper](https://openai.com/index/better-language-models/)
+- [Deep Learning Boom: Giant GPU supercomputers are being build](https://en.wikipedia.org/wiki/Colossus_(supercomputer))
+- [Deep Learning Boom: NVIDIA boosts GPU sales through NVIDIA DLI](https://www.nvidia.com/en-us/training/)
+- [Deep Learning Boom: Stargate LLC - a $500b AI infrastructure project](https://en.wikipedia.org/wiki/Stargate_LLC)
+- [Deep Learning Boom: EU also wants to build up AI giga factories](https://digital-strategy.ec.europa.eu/en/news/overwhelming-response-76-respondents-express-interest-european-ai-gigafactories-initiative)
+- [Deep Learning Boom: Bavaria wants to build up an AI giga factory](https://www.stmwk.bayern.de/pressemitteilung/12900/nr-46-vom-24-06-2025.html)
 
-# Videos
 
-- [Fine-Tune GPT-OSS-20B on Your Own Dataset Locally: Step-by-Step Tutorial](https://www.youtube.com/watch?v=LRvXsQhOlD0)
+# LLMs
+- [LLM Fine-Tuning: Fine-Tune GPT-OSS-20B on Your Own Dataset Locally: Step-by-Step Tutorial](https://www.youtube.com/watch?v=LRvXsQhOlD0)
 - [Andrej Karpathy: Deep Dive into LLMs like ChatGPT](https://www.youtube.com/watch?v=7xTGNNLPyMI )
+
+
+# Learning in Neural Networks
 - [Andrej Karpathy: The spelled-out intro to neural networks and backpropagation: building micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0)
 
 
