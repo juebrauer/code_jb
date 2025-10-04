@@ -4,8 +4,12 @@
 - [Germany Used Cars Dataset 2023](https://www.kaggle.com/datasets/wspirat/germany-used-cars-dataset-2023)
 
 
-# Demos for Deep Learning
+# Computer Vision
 
+- [xkcd Comic: Computer Vision is hard](https://xkcd.com/1425/)
+- [Chihuahua or muffin? - CV is hard](https://www.metamaven.com/chihuahua-vs-muffin-comparison-computer-vision-apis/)
+- [Chihuahua or muffin? - CV is not that hard any longer](https://www.reddit.com/r/ChatGPT/comments/1771zux/computer_vision_has_been_solved_internally/)
+- [CV is easy! The Summer Vision Project, 1966](https://dspace.mit.edu/bitstream/handle/1721.1/6125/AIM-100.pdf?sequence=2&isAllowed=y)
 - [Conv Op Demo](https://deeplizard.com/resource/pavq7noze2)
 - [Max-Pool Op Demo](https://deeplizard.com/resource/pavq7noze3)
   
