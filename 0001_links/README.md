@@ -34,6 +34,8 @@ Instead, the Kernel trick computes the similarity of vectors in that feature spa
 - [Deep Learning Boom: Important research figures also work for industry: Yann LeCun - Meta](https://en.wikipedia.org/wiki/Yann_LeCun)
 - [Deep Learning Boom: Important research figures also work for industry: Ian Goodfellow - DeepMind](https://en.wikipedia.org/wiki/Ian_Goodfellow)
 - [Deep Learning Boom: Important research figures also work for industry: Ross Girshick - Meta](https://www.rossgirshick.info/)
+- [MLP Demo 1: TensorFlow Playground](https://playground.tensorflow.org)
+- [MLP Demo 2: Classifier demo by John Dews](https://mlp.johndews.com/)
 
 
 # LLMs
