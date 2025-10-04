@@ -12,7 +12,10 @@
 - [CV is easy! The Summer Vision Project, 1966](https://dspace.mit.edu/bitstream/handle/1721.1/6125/AIM-100.pdf?sequence=2&isAllowed=y)
 - [Example of a classical CV approach: HOG detector](https://lear.inrialpes.fr/people/triggs/pubs/Dalal-cvpr05.pdf)
 - [How to deal with different scales? Image pyramids](https://en.wikipedia.org/wiki/Pyramid_(image_processing))
-- [HOG detector used a Support Vector Machine(SVM)](https://en.wikipedia.org/wiki/Support_vector_machine)
+- [HOG detector used a Support Vector Machine (SVM)](https://en.wikipedia.org/wiki/Support_vector_machine)
+- [Example 1: SVMs map features to high-dimensional space](https://en.wikipedia.org/wiki/Kernel_method) - The vectors are not explicitly mapped to a high-dimensional feature space.
+Instead, the Kernel trick computes the similarity of vectors in that feature space using a Kernel function that operates in the original space.
+- [Example 2: SVMs map features to high-dimensional space](https://medium.com/data-science/the-kernel-trick-c98cdbcaeb3f)
 - [Conv Op Demo](https://deeplizard.com/resource/pavq7noze2)
 - [Max-Pool Op Demo](https://deeplizard.com/resource/pavq7noze3)
   
