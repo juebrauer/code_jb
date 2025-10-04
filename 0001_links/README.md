@@ -30,6 +30,10 @@ Instead, the Kernel trick computes the similarity of vectors in that feature spa
 - [Deep Learning Boom: Stargate LLC - a $500b AI infrastructure project](https://en.wikipedia.org/wiki/Stargate_LLC)
 - [Deep Learning Boom: EU also wants to build up AI giga factories](https://digital-strategy.ec.europa.eu/en/news/overwhelming-response-76-respondents-express-interest-european-ai-gigafactories-initiative)
 - [Deep Learning Boom: Bavaria wants to build up an AI giga factory](https://www.stmwk.bayern.de/pressemitteilung/12900/nr-46-vom-24-06-2025.html)
+- [Deep Learning Boom: Important research figures also work for industry: Geoffrey Hinton - Google](https://en.wikipedia.org/wiki/Geoffrey_Hinton)
+- [Deep Learning Boom: Important research figures also work for industry: Yann LeCun - Meta](https://en.wikipedia.org/wiki/Yann_LeCun)
+- [Deep Learning Boom: Important research figures also work for industry: Ian Goodfellow - DeepMind](https://en.wikipedia.org/wiki/Ian_Goodfellow)
+- [Deep Learning Boom: Important research figures also work for industry: Ross Girshick - Meta](https://www.rossgirshick.info/)
 
 
 # LLMs
