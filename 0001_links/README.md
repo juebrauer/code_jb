@@ -18,7 +18,15 @@ Instead, the Kernel trick computes the similarity of vectors in that feature spa
 - [Example 2: SVMs map features to high-dimensional space](https://medium.com/data-science/the-kernel-trick-c98cdbcaeb3f)
 - [Conv Op Demo](https://deeplizard.com/resource/pavq7noze2)
 - [Max-Pool Op Demo](https://deeplizard.com/resource/pavq7noze3)
-  
+
+
+# Deep Learning
+- [Definition of Deep Learning by Jason Brownlee](https://machinelearningmastery.com/what-is-deep-learning/)
+- [Deep Learning Boom: Search term frequencies](https://trends.google.de/trends/explore?date=all&q=deep%20learning&hl=en-GB)
+- [Deep Learning Boom: Nr of ArXiv papers per year that contain a certain phrase in title or abstract](https://arxiv-trends.com/)
+- [Deep Learning Boom: Important papers now often are written in industry - word2vec](https://arxiv.org/pdf/1301.3781)
+- [Deep Learning Boom: Important papers now often are written in industry - Transformer paper](https://arxiv.org/abs/1706.03762)
+- [Deep Learning Boom: Important papers now often are written in industry - GPT2 paper](https://openai.com/index/better-language-models/)
 
 # Videos
 
