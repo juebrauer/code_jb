@@ -12,6 +12,7 @@
 - [CV is easy! The Summer Vision Project, 1966](https://dspace.mit.edu/bitstream/handle/1721.1/6125/AIM-100.pdf?sequence=2&isAllowed=y)
 - [Example of a classical CV approach: HOG detector](https://lear.inrialpes.fr/people/triggs/pubs/Dalal-cvpr05.pdf)
 - [How to deal with different scales? Image pyramids](https://en.wikipedia.org/wiki/Pyramid_(image_processing))
+- [HOG detector used a Support Vector Machine(SVM)](https://en.wikipedia.org/wiki/Support_vector_machine)
 - [Conv Op Demo](https://deeplizard.com/resource/pavq7noze2)
 - [Max-Pool Op Demo](https://deeplizard.com/resource/pavq7noze3)
   
