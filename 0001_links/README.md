@@ -10,6 +10,8 @@
 - [Chihuahua or muffin? - CV is hard](https://www.metamaven.com/chihuahua-vs-muffin-comparison-computer-vision-apis/)
 - [Chihuahua or muffin? - CV is not that hard any longer](https://www.reddit.com/r/ChatGPT/comments/1771zux/computer_vision_has_been_solved_internally/)
 - [CV is easy! The Summer Vision Project, 1966](https://dspace.mit.edu/bitstream/handle/1721.1/6125/AIM-100.pdf?sequence=2&isAllowed=y)
+- [Example of classical CV approach: HOG detector](https://lear.inrialpes.fr/people/triggs/pubs/Dalal-cvpr05.pdf)
+- [How to deal with different scales? Image pyramids](https://en.wikipedia.org/wiki/Pyramid_(image_processing))
 - [Conv Op Demo](https://deeplizard.com/resource/pavq7noze2)
 - [Max-Pool Op Demo](https://deeplizard.com/resource/pavq7noze3)
   
