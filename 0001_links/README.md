@@ -39,6 +39,7 @@ Instead, the Kernel trick computes the similarity of vectors in that feature spa
 
 
 # LLMs
+- [NLP Course for you by Lena Voita](https://lena-voita.github.io/nlp_course.html)
 - [LLM Fine-Tuning: Fine-Tune GPT-OSS-20B on Your Own Dataset Locally: Step-by-Step Tutorial](https://www.youtube.com/watch?v=LRvXsQhOlD0)
 - [Andrej Karpathy: Deep Dive into LLMs like ChatGPT](https://www.youtube.com/watch?v=7xTGNNLPyMI )
 
