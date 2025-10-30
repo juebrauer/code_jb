@@ -2,11 +2,25 @@
 
 int main() {
 
+    FILE *datei;
+    
+    // Datei zum Schreiben öffnen
+    datei = fopen("underflow.txt", "w");
+    
+    // Prüfen, ob das Öffnen erfolgreich war
+    if (datei == NULL) {
+        printf("Fehler beim Öffnen der Datei!\n");
+        return 1;
+    }
+
+
     double x = 1.0;
 
-    for (int i=1; i<300; i++)
+    for (int i=1; i<600; i++)
     {
         x = x / 10;
-        printf("%03d %.300f\n", i, x);
+        fprintf(datei, "%03d %.600f\n", i, x);
     }
+
+    fclose(datei);
 }
