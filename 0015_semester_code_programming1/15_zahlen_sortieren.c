@@ -2,9 +2,9 @@
 
 #define N 5
 
-int x[N];
 
-void show_array()
+
+void show_array(int x[])
 {
     for (int i=0; i<N; i++)
         printf("x[%d]=%d ", i, x[i]);
@@ -12,7 +12,7 @@ void show_array()
 }
 
 
-void read_in_numbers()
+void read_in_numbers(int x[])
 {
     printf("Please enter %d numbers now!\n", N);
     for (int i=0; i<N; i++)
@@ -22,11 +22,24 @@ void read_in_numbers()
     }
 }
 
+void save_array(int x[])
+{
+    FILE* f;
+    f  = fopen("array_sortiert.txt", "w");
+    for (int i=0; i<N; i++)
+    {
+        fprintf(f, "%i: %d\n", i, x[i]);
+    }    
+    fclose(f);
+}
+
 
 int main()
 {
-    read_in_numbers();
-    show_array();
+    int x[N];
+
+    read_in_numbers(x);
+    show_array(x);
 
     int swapped;
     do
@@ -44,11 +57,13 @@ int main()
             swapped = 1;
         }
 
-        show_array();
+        show_array(x);
 
     } while (swapped == 1);
     
     printf("\nEndergebnis:\n");
-    show_array();
+    show_array(x);
+
+    save_array(x);
     
 }
