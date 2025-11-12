@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Mehrere Canvas-Elemente</title>
+  <style>
+    canvas {
+      border: 1px solid #000;
+      margin: 10px;
+    }
+  </style>
+</head>
+<body>
+  <button onclick="zeichne()">Auf beiden zeichnen</button>
+
+  <canvas id="canvas1" width="200" height="200"></canvas>
+  <canvas id="canvas2" width="200" height="200"></canvas>
+
+  <script>
+    function zeichne() {
+      const canvases = [document.getElementById("canvas1"), document.getElementById("canvas2")];
+
+      canvases.forEach(canvas => {
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (let i = 0; i < 5; i++) {
+          const x1 = Math.random() * canvas.width;
+          const y1 = Math.random() * canvas.height;
+          const x2 = Math.random() * canvas.width;
+          const y2 = Math.random() * canvas.height;
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.strokeStyle = `hsl(${Math.random() * 360}, 100%, 50%)`;
+          ctx.lineWidth = Math.random() * 4 + 1;
+          ctx.stroke();
+        }
+      });
+    }
+  </script>
+</body>
+</html>

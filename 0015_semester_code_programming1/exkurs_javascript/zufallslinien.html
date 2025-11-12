@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Zufällige Linien</title>
+  <style>
+    canvas {
+      border: 5px solid #000;
+      display: block;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <button onclick="zeichneLinien()">10 zufällige Linien zeichnen</button>
+  <canvas id="leinwand" width="500" height="300"></canvas>
+
+  <script>
+    function zeichneLinien() {
+      const canvas = document.getElementById("leinwand");
+      const ctx = canvas.getContext("2d");
+
+      // Canvas löschen
+      ctx.clearRect(0, 0, canvas.width/2, canvas.height/2);
+
+      // 10 zufällige Linien zeichnen
+      for (let i = 0; i < 10; i++) {
+        const x1 = Math.random() * canvas.width;
+        const y1 = Math.random() * canvas.height;
+        const x2 = Math.random() * canvas.width;
+        const y2 = Math.random() * canvas.height;
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = `hsl(${Math.random() * 360}, 100%, 50%)`; // zufällige Farbe
+        //ctx.lineWidth = Math.random() * 4 + 1; // zufällige Strichstärke
+        ctx.lineWidth = 10; // zufällige Strichstärke
+        ctx.stroke();
+      }
+    }
+  </script>
+</body>
+</html>
