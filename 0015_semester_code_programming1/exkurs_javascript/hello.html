@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Countdown Beispiel</title>
+</head>
+<body>
+
+<h1 id="anzeige">Bereit.</h1>
+
+<button data-wert="10">Countdown 10</button>
+<button data-wert="5">Countdown 5</button>
+<button data-wert="3">Countdown 3</button>
+
+<script>
+  // Die Anzeige, wo der Countdown gezeigt wird
+  const anzeige = document.getElementById("anzeige");
+
+  // Alle Buttons einsammeln
+  const buttons = document.querySelectorAll("button");
+
+  // Für jeden Button: Klick-Ereignis verbinden
+  buttons.forEach(function(button) {
+    button.addEventListener("click", function() {
+
+      // n holen, steht im data-wert Attribut
+      let n = Number(button.getAttribute("data-wert"));
+
+      // Anzeige sofort setzen
+      anzeige.textContent = n;
+
+      // Intervall starten
+      const interval = setInterval(function() {
+        n--;
+        anzeige.textContent = n;
+
+        // Wenn bei 0 angekommen: stoppen
+        if (n <= 0) {
+          clearInterval(interval);
+          anzeige.textContent = "Fertig!";
+        }
+      }, 1000); // 1000ms = 1 Sekunde
+    });
+  });
+</script>
+
+</body>
+</html>

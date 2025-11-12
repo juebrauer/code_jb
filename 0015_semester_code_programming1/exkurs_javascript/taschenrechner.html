@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Mini-Taschenrechner</title>
+</head>
+<body>
+  <h1>Mini-Taschenrechner</h1>
+
+  <input id="zahl1" type="number" placeholder="Zahl 1">
+  <select id="operator">
+    <option value="+">+</option>
+    <option value="-">−</option>
+    <option value="*">×</option>
+    <option value="/">÷</option>
+    <option value="%">%</option>
+  </select>
+  <input id="zahl2" type="number" placeholder="Zahl 2">
+
+  <button onclick="rechnen()">=</button>
+  <span id="ergebnis"></span>
+
+  <script>
+    function rechnen() {
+      const zahl1 = parseFloat(document.getElementById('zahl1').value);
+      const zahl2 = parseFloat(document.getElementById('zahl2').value);
+      const op = document.getElementById('operator').value;
+      let erg;
+
+      if (isNaN(zahl1) || isNaN(zahl2)) {
+        erg = 'Bitte beide Zahlen eingeben!';
+      } else {
+        switch (op) {
+          case '+': erg = zahl1 + zahl2; break;
+          case '-': erg = zahl1 - zahl2; break;
+          case '*': erg = zahl1 * zahl2; break;
+          case '/':
+            erg = zahl2 === 0 ? 'Division durch 0!' : zahl1 / zahl2;
+            break;
+          case '%': erg = zahl1 % zahl2; break;
+          default:
+            erg = 'Ungültiger Operator';
+        }
+      }
+
+      document.getElementById('ergebnis').textContent = erg;
+    }
+  </script>
+</body>
+</html>
