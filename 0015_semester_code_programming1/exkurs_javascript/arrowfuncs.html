@@ -1,0 +1,23 @@
+<html lang="de">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Arrow Function vs. Normale Funktion</title>
+</head>
+
+<body>
+    Hier sind die Knöpfe:<br><br>
+
+    <button onclick="machewas()">Hallo-Knopf</button>
+    <button onclick="(() => {document.getElementById('ausgabe').innerHTML += 'Tschuess<br>'})()">
+        Tschuess-Knopf
+    </button>    
+    <p id="ausgabe"></p>
+
+    <script>
+        function machewas() {
+            document.getElementById('ausgabe').innerHTML += 'Hallo<br>'
+        }        
+    </script>
+
+</body>

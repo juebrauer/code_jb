@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Analoge Uhr</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: #555555;
+      font-family: sans-serif;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="clock" width="300" height="300"></canvas>
+
+  <script>
+    const canvas = document.getElementById("clock");
+    const ctx = canvas.getContext("2d");
+    const radius = canvas.width / 2;
+
+    // Koordinatensystem in die Mitte verschieben
+    ctx.translate(radius, radius);
+
+    function drawClock() {
+      ctx.clearRect(-radius, -radius, canvas.width, canvas.height);
+
+      drawFace();
+      drawTicks();
+      drawHands();
+    }
+
+    function drawFace() {
+      // Außenkreis
+      ctx.beginPath();
+      ctx.arc(0, 0, radius - 5, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "#00FF00";
+      ctx.stroke();
+
+      // Mittelpunkt
+      ctx.beginPath();
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#000000";
+      ctx.fill();
+    }
+
+    function drawTicks() {
+      for (let i = 0; i < 60; i++) {
+        const angle = (Math.PI * 2 * i) / 60;
+        const isHourTick = i % 5 === 0;
+
+        const inner = isHourTick ? radius - 20 : radius - 10;
+        const outer = radius - 5;
+
+        ctx.beginPath();
+        ctx.moveTo(inner * Math.cos(angle), inner * Math.sin(angle));
+        ctx.lineTo(outer * Math.cos(angle), outer * Math.sin(angle));
+        ctx.lineWidth = isHourTick ? 3 : 1;
+        ctx.strokeStyle = isHourTick ? "#0000FF" : "#000000";
+        ctx.stroke();
+      }
+    }
+
+    function drawHands() {
+      const now = new Date();
+      const seconds = now.getSeconds();
+      const minutes = now.getMinutes();
+      const hours = now.getHours() % 12;
+
+      // Winkel berechnen (Radiant)
+      const secondAngle = (Math.PI * 2 * seconds) / 60;
+      const minuteAngle = (Math.PI * 2 * (minutes + seconds / 60)) / 60;
+      const hourAngle   = (Math.PI * 2 * (hours + minutes / 60 + seconds / 3600)) / 12;
+
+      // Stundenzeiger
+      drawHand(hourAngle, radius * 0.5, 6);
+
+      // Minutenzeiger
+      drawHand(minuteAngle, radius * 0.75, 4);
+
+      // Sekundenzeiger (rot, dünner)
+      drawHand(secondAngle, radius * 0.85, 10, "red");
+    }
+
+    function drawHand(angle, length, width, color = "#000000") {
+      ctx.beginPath();
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = color;
+      ctx.moveTo(0, 0);
+      ctx.lineTo(length * Math.cos(angle - Math.PI / 2),
+                 length * Math.sin(angle - Math.PI / 2));
+      ctx.stroke();
+    }
+    
+    setInterval(drawClock, 500);
+    drawClock(); // direkt beim Laden einmal zeichnen
+  </script>
+</body>
+</html>
