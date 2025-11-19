@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Meteoritenspiel</title>
+  <style>
+    body {
+      margin: 0;
+      background: #999;
+      color: #eee;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    #gameCanvas {
+      border: 2px solid #eee;
+      background: #000;
+      cursor: crosshair;
+    }
+
+    #info {
+      margin-top: 10px;
+      font-size: 14px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="500"></canvas>
+<div id="info" style="color:white">
+  Linksklick: Meteoriten abschießen – Schaden = zerstörte Landschaftspixel (negativer Score).<br>
+  Drücke "R", um eine neue Landschaft zu erzeugen und neu zu starten.
+</div>
+
+<script>
+  // ======== Hilfsfunktionen ========
+  function randRange(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  // ======== Klasse Landscape: verwaltet Hügellandschaft und Schaden ========
+  class Landscape {
+    constructor(width, height) {
+      this.width = width;
+      this.height = height;
+
+      // Offscreen-Canvas für die Landschaft, damit wir Pixel zählen können
+      this.canvas = document.createElement('canvas');
+      this.canvas.width = width;
+      this.canvas.height = height;
+      this.ctx = this.canvas.getContext('2d');
+
+      this.totalPixels = 0;      // aktuelle Anzahl "gesunder" Landschaftspixel
+      this.scoreDamage = 0;      // akkumulierte Schadenspixel
+      this.generateRandom();
+    }
+
+    generateRandom() {
+      const ctx = this.ctx;
+      ctx.clearRect(0, 0, this.width, this.height);
+
+      // einfache zufällige Hügellandschaft
+      const baseHeight = this.height * 0.8;
+      const maxHill = this.height * 0.6;
+      const step = 30;
+
+      ctx.fillStyle = '#0b0';
+      ctx.beginPath();
+      ctx.moveTo(0, this.height);
+
+      let x = 0;
+      let y = baseHeight + randRange(-maxHill, maxHill);
+
+      ctx.lineTo(x, y);
+
+      while (x < this.width) {
+        const nextX = x + step;
+        // etwas zufällige Änderung, aber geglättet
+        const delta = randRange(-maxHill * 0.5, 0);
+        y = baseHeight + delta;
+        if (y > this.height - 20) y = this.height - 20;
+        if (y < this.height * 0.1) y = this.height * 0.1;
+        ctx.lineTo(nextX, y);
+        x = nextX;
+      }
+
+      ctx.lineTo(this.width, this.height);
+      ctx.closePath();
+      ctx.fill();
+
+      // Boden unten etwas dicker machen
+      ctx.fillRect(0, this.height - 5, this.width, 5);
+
+      this.totalPixels = this.countSolidPixels();
+      this.scoreDamage = 0;
+    }
+
+    // Gibt die Höhe der Landschaft an Position x zurück (y-Koordinate)
+    getHeightAt(x) {
+      x = Math.max(0, Math.min(this.width - 1, x));
+      // Wir suchen von oben nach unten den ersten nicht-transparenten Pixel
+      const imageData = this.ctx.getImageData(x, 0, 1, this.height).data;
+      for (let y = 0; y < this.height; y++) {
+        const alpha = imageData[y * 4 + 3];
+        if (alpha !== 0) {
+          return y;
+        }
+      }
+      return this.height + 1; // unterhalb des Canvas
+    }
+
+    countSolidPixels() {
+      const img = this.ctx.getImageData(0, 0, this.width, this.height);
+      let count = 0;
+      const data = img.data;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] !== 0) count++;
+      }
+      return count;
+    }
+
+    // Beschädigt die Landschaft mit einem Einschlagskreis
+    damage(x, y, radius) {
+      const ctx = this.ctx;
+      const before = this.totalPixels;
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      const after = this.countSolidPixels();
+      const destroyed = Math.max(0, before - after);
+      this.totalPixels = after;
+      this.scoreDamage += destroyed;
+      return destroyed;
+    }
+
+    draw(targetCtx) {
+      targetCtx.drawImage(this.canvas, 0, 0);
+    }
+  }
+
+  // ======== Klasse Meteor ========
+  class Meteor {
+    constructor(x, y, radius, speed) {
+      this.x = x;
+      this.y = y;
+      this.radius = radius;
+      this.speed = speed;
+      this.isDead = false;
+    }
+
+    update(dt, landscape) {
+      this.y += this.speed * dt;
+
+      // Prüfen, ob er die Landschaft berührt
+      const groundY = landscape.getHeightAt(Math.floor(this.x));
+      if (!this.isDead && this.y + this.radius >= groundY) {
+        // Einschlag
+        landscape.damage(this.x, this.y, this.radius * 3.0);
+        this.isDead = true;
+      }
+
+      // Falls er ganz unten rausfällt (Sicherheitsnetz)
+      if (this.y - this.radius > landscape.height + 50) {
+        this.isDead = true;
+      }
+    }
+
+    draw(ctx) {
+      ctx.save();
+      const gradient = ctx.createRadialGradient(
+        this.x - this.radius * 0.3, this.y - this.radius * 0.3, this.radius * 0.1,
+        this.x, this.y, this.radius
+      );
+      gradient.addColorStop(0, '#fff');
+      gradient.addColorStop(1, '#f60');
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    containsPoint(px, py) {
+      const dx = px - this.x;
+      const dy = py - this.y;
+      return dx * dx + dy * dy <= this.radius * this.radius;
+    }
+  }
+
+  // ======== Klasse Game ========
+  class Game {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.ctx = canvas.getContext('2d');
+
+      this.landscape = new Landscape(canvas.width, canvas.height);
+      this.meteors = [];
+
+      this.lastTime = 0;
+      this.spawnTimer = 0;
+      this.spawnInterval = 0.8; // Sekunden
+
+      this.crosshairX = canvas.width / 2;
+      this.crosshairY = canvas.height / 2;
+
+      this.running = true;
+
+      this.setupInput();
+      requestAnimationFrame((t) => this.gameLoop(t));
+    }
+
+    setupInput() {
+      this.canvas.addEventListener('mousemove', (e) => {
+        const rect = this.canvas.getBoundingClientRect();
+        this.crosshairX = e.clientX - rect.left;
+        this.crosshairY = e.clientY - rect.top;
+      });
+
+      this.canvas.addEventListener('mousedown', () => {
+        this.tryShoot();
+      });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'r' || e.key === 'R') {
+          this.reset();
+        }
+      });
+    }
+
+    reset() {
+      this.landscape.generateRandom();
+      this.meteors = [];
+      this.spawnTimer = 0;
+      this.running = true;
+    }
+
+    tryShoot() {
+      if (!this.running) return;
+
+      // Suche nach einem Meteor unter dem Fadenkreuz
+      for (let i = 0; i < this.meteors.length; i++) {
+        const m = this.meteors[i];
+        if (!m.isDead && m.containsPoint(this.crosshairX, this.crosshairY)) {
+          m.isDead = true;
+          // Optional: kleiner Bonus, z.B. Schadensreduktion, hier nur "weg"
+          break;
+        }
+      }
+    }
+
+    spawnMeteor() {
+      const x = randRange(20, this.canvas.width - 20);
+      const y = -20;
+      const radius = randRange(8, 20);
+      const speed = randRange(80, 160); // Pixel pro Sekunde
+      this.meteors.push(new Meteor(x, y, radius, speed));
+    }
+
+    update(dt) {
+      if (!this.running) return;
+
+      // Meteore erzeugen
+      this.spawnTimer += dt;
+      if (this.spawnTimer >= this.spawnInterval) {
+        this.spawnTimer = 0;
+        this.spawnMeteor();
+        // zufälliges leichtes Variieren der Zeit
+        this.spawnInterval = randRange(0.6, 1.4);
+      }
+
+      // Meteore bewegen
+      for (const m of this.meteors) {
+        m.update(dt, this.landscape);
+      }
+
+      // tote Meteore entfernen
+      this.meteors = this.meteors.filter(m => !m.isDead);
+
+      // Optionales Ende, wenn zu viel Schaden
+      if (this.landscape.scoreDamage > 50000) {
+        this.running = false;
+      }
+    }
+
+    drawCrosshair() {
+      const ctx = this.ctx;
+      const x = this.crosshairX;
+      const y = this.crosshairY;
+
+      ctx.save();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      const size = 10;
+
+      ctx.beginPath();
+      ctx.moveTo(x - size, y);
+      ctx.lineTo(x + size, y);
+      ctx.moveTo(x, y - size);
+      ctx.lineTo(x, y + size);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x, y, size * 1.4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    drawHUD() {
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px sans-serif';
+      ctx.fillText('Schaden (Pixel): ' + this.landscape.scoreDamage, 10, 20);
+
+      if (!this.running) {
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Zu viel Schaden! Drücke "R" für einen Neustart.', 80, 60);
+      }
+      ctx.restore();
+    }
+
+    render() {
+      const ctx = this.ctx;
+      ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+      // Hintergrund
+      ctx.fillStyle = '#001';
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+      // Landschaft
+      this.landscape.draw(ctx);
+
+      // Meteore
+      for (const m of this.meteors) {
+        m.draw(ctx);
+      }
+
+      // Fadenkreuz
+      this.drawCrosshair();
+
+      // HUD
+      this.drawHUD();
+    }
+
+    gameLoop(timestamp) {
+      const t = timestamp / 1000; // ms -> s
+      const dt = this.lastTime ? (t - this.lastTime) : 0;
+      this.lastTime = t;
+
+      this.update(dt);
+      this.render();
+
+      requestAnimationFrame((t2) => this.gameLoop(t2));
+    }
+  }
+
+  // ======== Spiel starten ========
+  const canvas = document.getElementById('gameCanvas');
+  const game = new Game(canvas);
+</script>
+
+</body>
+</html>
