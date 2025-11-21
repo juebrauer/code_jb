@@ -150,16 +150,18 @@
 
   // ======== Klasse Meteor ========
   class Meteor {
-    constructor(x, y, radius, speed) {
+    constructor(x, y, radius, speedy, speedx) {
       this.x = x;
       this.y = y;
       this.radius = radius;
-      this.speed = speed;
+      this.speedy = speedy;
+      this.speedx = speedx;
       this.isDead = false;
     }
 
     update(dt, landscape) {
-      this.y += this.speed * dt;
+      this.y += this.speedy * dt;
+      this.x += this.speedx * dt; 
 
       // Prüfen, ob er die Landschaft berührt
       const groundY = landscape.getHeightAt(Math.floor(this.x));
@@ -169,8 +171,11 @@
         this.isDead = true;
       }
 
-      // Falls er ganz unten rausfällt (Sicherheitsnetz)
-      if (this.y - this.radius > landscape.height + 50) {
+      // Falls er ganz unten rausfällt oder seitlich (Sicherheitsnetz)
+      if ((this.y - this.radius > landscape.height + 50) ||
+          (this.x + this.radius < 0) ||
+          (this.x - this.radius >= landscape.width) )
+      {
         this.isDead = true;
       }
     }
@@ -216,6 +221,9 @@
 
       this.running = true;
 
+      this.shootSound = new Audio("lasershot.wav"); 
+      this.shootSound.volume = 0.4;  // optional
+
       this.setupInput();
       requestAnimationFrame((t) => this.gameLoop(t));
     }
@@ -248,6 +256,9 @@
     tryShoot() {
       if (!this.running) return;
 
+      this.shootSound.currentTime = 0;
+      this.shootSound.play();
+
       // Suche nach einem Meteor unter dem Fadenkreuz
       for (let i = 0; i < this.meteors.length; i++) {
         const m = this.meteors[i];
@@ -263,8 +274,9 @@
       const x = randRange(20, this.canvas.width - 20);
       const y = -20;
       const radius = randRange(8, 20);
-      const speed = randRange(80, 160); // Pixel pro Sekunde
-      this.meteors.push(new Meteor(x, y, radius, speed));
+      const speedy = randRange(80, 160); // Geschwindigkeit in y-Richtung in Pixel pro Sekunde
+      const speedx = randRange(-50, +50);  // Geschwindigkeit in x-Richtung in Pixel pro Sekunde
+      this.meteors.push(new Meteor(x, y, radius, speedy, speedx));
     }
 
     update(dt) {
