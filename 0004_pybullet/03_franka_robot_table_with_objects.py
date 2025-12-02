@@ -291,7 +291,7 @@ def main(gui=True):
     step(int(0.6/DT))
 
     # Small pause (purely cosmetic) and disconnect from physics server.
-    time.sleep(0.3)
+    time.sleep(10)
     p.disconnect()
 
 if __name__ == "__main__":
