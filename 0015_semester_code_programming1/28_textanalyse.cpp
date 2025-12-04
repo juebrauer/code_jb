@@ -43,7 +43,8 @@ private:
 
 public:
     // Konstruktor
-    TextAnalyse() : zeilen(0), woerter(0), leerzeilen(0), dateiname("") {
+    TextAnalyse() : woerter(0), leerzeilen(0), dateiname("") {
+        this->zeilen = 0;
         std::cout << "TextAnalyse-Objekt wurde erstellt." << std::endl;
     }
     
