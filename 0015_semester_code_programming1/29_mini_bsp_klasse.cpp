@@ -1,4 +1,5 @@
 #include <iostream>
+#include <vector>
 
 
 class Figure
@@ -11,10 +12,15 @@ class Figure
 
         }
 
-        void update()
+        virtual void update()
         {
             this->x += this->dx;
             this->y += this->dy;
+        }
+
+        void show_info()
+        {
+            std::cout << name << " is at " << x << "," << y << std::endl;
         }
         
         float x;
@@ -39,7 +45,7 @@ class Knight : public Figure
             this->horse = horse;
         }
 
-        void update()
+        void update() override
         {
             if (this->horse)
             {
@@ -66,26 +72,39 @@ class Archer : public Figure
 
         }
 
+        void update() override
+        {
+           this->x += 1.5 * this->dx;
+           this->y += 1.5 * this->dy;
+        } 
+
       
 };
 
 
 int main()
 {
-    Knight k1(10,10, "Aragon", true);
-    Knight k2(10,10, false);
+    std::vector<Figure*> all_figures;
+        
+    Figure* k1 = new Knight(10,10, "Aragon", true);
+    Figure* k2 = new Knight(10,10, false);
 
-    std::cout << "Knight " << k1.name << " is at (" << k1.x << "," << k1.y << ")" << std::endl;
-    std::cout << "Knight " << k2.name << " is at (" << k2.x << "," << k2.y << ")" << std::endl;
-    
-    k1.update();
-    k2.update();
+    Figure* a1 = new Archer(100,100, "Elma");
+    Figure* a2 = new Archer(102,100, "Legolas");
 
-    std::cout << "Knight " << k1.name << " is at (" << k1.x << "," << k1.y << ")" << std::endl;
-    std::cout << "Knight " << k2.name << " is at (" << k2.x << "," << k2.y << ")" << std::endl;
-    
+    all_figures.push_back( k1 );
+    all_figures.push_back( k2 );
+    all_figures.push_back( a1 );
+    all_figures.push_back( a2 );
 
-    Archer a1(100,100, "Elma");
-    Archer a2(102,100, "Legolas");
+    for (int i=0; i<all_figures.size(); i++)
+    {
+        all_figures[i]->update();
+        all_figures[i]->show_info();
+    }
    
+    delete k1;
+    delete k2;
+    delete a1;
+    delete a2;
 }
