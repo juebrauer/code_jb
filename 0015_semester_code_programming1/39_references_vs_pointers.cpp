@@ -16,7 +16,6 @@ void waitForKey(const string& message) {
     cin.ignore(numeric_limits<streamsize>::max(), '\n');
 }
 
-// Normal functions (no lambdas, no auto)
 void incrementByReference(int& v) {
     v++;
 }
@@ -66,7 +65,7 @@ int main() {
 
     ptr = &y;
     *ptr = 200;
-    cout << "y = " << y << endl;
+    cout << "x = " << x << ", y = " << y << endl;
 
 
     cout << "\n===== SECTION 4: Addresses =====\n";
@@ -90,7 +89,7 @@ int main() {
     }
 
     // This would NOT compile:
-    // int& badRef = nullptr;
+    //int& badRef = nullptr;
 
 
     cout << "\n===== SECTION 6: Function-style usage =====\n";
