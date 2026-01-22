@@ -12,11 +12,7 @@ class Figure
 
         }
 
-        virtual void update()
-        {
-            this->x += this->dx;
-            this->y += this->dy;
-        }
+        virtual void update() = 0;
 
         void show_info()
         {
@@ -85,7 +81,8 @@ class Archer : public Figure
 int main()
 {
     std::vector<Figure*> all_figures;
-        
+
+    
     Figure* k1 = new Knight(10,10, "Aragon", true);
     Figure* k2 = new Knight(10,10, false);
 
